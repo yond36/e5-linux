@@ -49,8 +49,8 @@ jobs:
           mkdir -p work/extra
           gl=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
           printf '%s\n' \
-            9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk \
-            14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk |
+            '9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk' \
+            '14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk' |
           while read -r sum f; do
               curl -fsSL --retry 5 "$gl/$f" -o "work/extra/$f"
               got=$(sha256sum "work/extra/$f" | cut -d" " -f1)
