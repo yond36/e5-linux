@@ -90,8 +90,27 @@ jobs:
               for p in cage cog seatd libmesa-panfrost; do
                   apk search -e "$p" >/dev/null || { echo "the video feed has no $p" >&2; exit 1; }
               done
-              apk add /in/extra/libgst1gl-1.26.4-r1.apk /in/extra/gst1-mod-opengl-1.26.4-r1.apk \
-                  cage cog seatd libmesa-panfrost >/dev/null
+              echo "== keys"; ls /etc/apk/keys/
+              # (does a package from that feed verify with the keys of this
+              # base?  seatd has a single dependency and no virtual ones)
+              if apk add seatd >/dev/null 2>/tmp/seatd.err; then
+                  echo "== video feed: packages verify"
+              else
+                  echo "== video feed: packages do NOT verify"; cat /tmp/seatd.err
+              fi
+              # (the dependencies of the pinned files first, so an unverified
+              # install covers only those files themselves)
+              apk add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
+                  libgst1controller libgraphene libjpeg libpng >/dev/null
+              if apk add /in/extra/libgst1gl-1.26.4-r1.apk /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null 2>/tmp/gl.err; then
+                  echo "== pinned files: verify"
+              else
+                  echo "== pinned files: do NOT verify, installing with --allow-untrusted"
+                  cat /tmp/gl.err
+                  apk add --allow-untrusted /in/extra/libgst1gl-1.26.4-r1.apk \
+                      /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null
+              fi
+              apk add cage cog libmesa-panfrost >/dev/null || { echo "== the screen packages failed" >&2; exit 1; }
               echo "== installed"
               for p in cage cog libcogcore libwpewebkit libgst1gl gst1-mod-opengl libmesa-panfrost \
                        seatd libseat libwayland libxkbcommon wlroots xkeyboard-config harfbuzz \
