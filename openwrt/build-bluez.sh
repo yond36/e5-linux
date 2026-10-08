@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build OpenWrt's bluez packages with the E5's patches.
+# Build the distribution's bluez packages with the E5's patches.
 #
 #   openwrt/build-bluez.sh        -> out/openwrt/bluez-*.apk
 #
@@ -9,17 +9,21 @@
 #      drops them, and no audio profile ever connects (docs/FINDINGS.md 45).
 #
 # Built like ModemManager (openwrt/build-modemmanager.sh): natively on arm64,
-# in OpenWrt's source tree at the release tag, in the Docker volume
-# e5-openwrt-src -- run build-modemmanager.sh once first, it sets the tree,
-# the host tools and the toolchain up.  The release is OpenWrt's plus 900 plus
+# in the distribution's source tree at the release tag, in the Docker volume
+# e5-<distribution>-src -- run build-modemmanager.sh once first, it sets the
+# tree, the host tools and the toolchain up.  The release is the
+# distribution's plus 900 plus
 # E5REV, so apk never replaces these with the repository's.
 set -euo pipefail
-VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
+# the distribution and its release: openwrt 25.12.5, immortalwrt 25.12.2 (the
+# package is built from that distribution's own tree, feeds and toolchain)
+. "$HERE/wrt-distro.sh"
+VER=$E5_WRT_VER
+URL=$E5_WRT_URL
 WORK="$TOP/work/openwrt"
 OUT="$TOP/out/openwrt"
-URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
 # 1: 01-sdp-large-mtu
 E5REV=1
 mkdir -p "$WORK" "$OUT"
@@ -34,7 +38,7 @@ for p in "$TOP"/rootfs/deb-patches/bluez-0*.patch; do
     n=$((n + 1))
 done
 
-docker run --rm --platform linux/arm64 -v e5-openwrt-src:/build \
+docker run --rm --platform linux/arm64 -v "$E5_WRT_SRC_VOLUME":/build \
     -v "$WORK":/work:ro -v "$OUT":/out -e E5REV="$E5REV" \
     -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
     debian:trixie bash -euc '
@@ -44,7 +48,7 @@ apt-get install -y -qq --no-install-recommends build-essential ca-certificates c
     gawk gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip wget \
     xz-utils zlib1g-dev zstd >/dev/null
 export FORCE_UNSAFE_CONFIGURE=1
-cd /build/openwrt 2>/dev/null || { echo "no buildroot in e5-openwrt-src: run openwrt/build-modemmanager.sh first" >&2; exit 1; }
+cd /build/openwrt 2>/dev/null || { echo "no buildroot in the source volume: run openwrt/build-modemmanager.sh first" >&2; exit 1; }
 [ -f staging_dir/.e5-toolchain-ok ] || { echo "no toolchain yet: run openwrt/build-modemmanager.sh first" >&2; exit 1; }
 ./scripts/feeds install bluez-daemon >/dev/null
 P=feeds/packages/utils/bluez

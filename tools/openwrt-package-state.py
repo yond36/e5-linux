@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 TOP = Path(__file__).resolve().parents[1]
@@ -15,11 +16,14 @@ def checksum(path):
 
 
 def sources(version):
-    files = [TOP / 'openwrt/build-modemmanager.sh', TOP / 'openwrt/tests/voice-identity.py',
+    files = [TOP / 'openwrt/build-modemmanager.sh', TOP / 'openwrt/wrt-distro.sh',
+             TOP / 'openwrt/tests/voice-identity.py',
              TOP / 'openwrt/tests/sim-power.py', Path(__file__).resolve()]
     files += sorted((TOP / 'rootfs/deb-patches').glob('modemmanager-0*.patch'))
     files += sorted((TOP / 'openwrt/patches').glob('modemmanager-package-*.patch'))
-    return {'openwrt': version, 'files': {str(p.relative_to(TOP)): checksum(p) for p in files}}
+    # (the packages are built against one distribution's tree and toolchain)
+    return {'distro': os.environ.get('E5_WRT_DISTRO', 'openwrt'), 'openwrt': version,
+            'files': {str(p.relative_to(TOP)): checksum(p) for p in files}}
 
 
 def inspect(version):

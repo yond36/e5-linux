@@ -1,15 +1,21 @@
-name: Build and publish OpenWrt
-run-name: OpenWrt ${{ inputs.openwrt_version || '25.12.5' }} · ${{ github.ref_name }}
+name: Build and publish the E5's Linux
+run-name: ${{ inputs.wrt_distro || 'immortalwrt' }} ${{ inputs.wrt_version || (inputs.wrt_distro == 'openwrt' && '25.12.5' || '25.12.2') }} · ${{ github.ref_name }}
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      openwrt_version:
-        description: OpenWrt release
-        default: '25.12.5'
+      wrt_distro:
+        description: Base distribution (ImmortalWrt, or OpenWrt itself)
+        type: choice
+        options: [immortalwrt, openwrt]
+        default: immortalwrt
         required: true
+      wrt_version:
+        description: 'Base release (empty: the distribution default)'
+        default: ''
+        required: false
       kernel_ref:
         description: linux-lts-e5 branch, tag or commit
         default: e5-6.18
@@ -40,7 +46,10 @@ concurrency:
 
 env:
   TZ: CST-8
-  E5_WRT_VER: ${{ inputs.openwrt_version || '25.12.5' }}
+  # the distribution and its release (openwrt/wrt-distro.sh): ImmortalWrt by
+  # default, with OpenWrt itself selectable for the same tree
+  E5_WRT_DISTRO: ${{ inputs.wrt_distro || 'immortalwrt' }}
+  E5_WRT_VER: ${{ inputs.wrt_version || (inputs.wrt_distro == 'openwrt' && '25.12.5' || '25.12.2') }}
 
 jobs:
   build:
@@ -106,36 +115,36 @@ jobs:
           python3 tools/ci-inputs.py restore "$RUNNER_TEMP/ci-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
       - name: Check installer and audio logic
         run: |
-          bash -n openwrt/make-flash-bundle.sh openwrt/build-rootfs.sh upstream/build.sh
-          # The GPT and bounded-write tests need a disposable OpenWrt userspace.
+          bash -n openwrt/wrt-distro.sh openwrt/make-flash-bundle.sh openwrt/build-rootfs.sh upstream/build.sh
+          # The GPT and bounded-write tests need a disposable userspace of the
+          # distribution being built (E5_WRT_DISTRO / E5_WRT_VER above).
+          . openwrt/wrt-distro.sh
           mkdir -p work/openwrt
-          base="https://downloads.openwrt.org/releases/$E5_WRT_VER/targets/armsr/armv8"
-          file="openwrt-$E5_WRT_VER-armsr-armv8-rootfs.tar.gz"
-          curl -fsSL --retry 5 "$base/$file" -o "work/openwrt/$file"
-          curl -fsSL --retry 5 "$base/sha256sums" -o work/openwrt/sha256sums
-          checksum=$(awk -v file="$file" '$2 == "*" file || $2 == file { print $1 }' work/openwrt/sha256sums)
-          [ -n "$checksum" ] || { echo '::error::No checksum for OpenWrt rootfs'; exit 1; }
-          printf '%s  %s\n' "$checksum" "work/openwrt/$file" | sha256sum --check
-          docker import --platform linux/arm64 "work/openwrt/$file" "e5-openwrt-base:$E5_WRT_VER"
+          curl -fsSL --retry 5 "$E5_WRT_URL/$E5_WRT_TARBALL" -o "work/openwrt/$E5_WRT_TARBALL"
+          curl -fsSL --retry 5 "$E5_WRT_URL/sha256sums" -o work/openwrt/sha256sums
+          checksum=$(awk -v file="$E5_WRT_TARBALL" '$2 == "*" file || $2 == file { print $1 }' work/openwrt/sha256sums)
+          [ -n "$checksum" ] || { echo "::error::No checksum for $E5_WRT_TARBALL"; exit 1; }
+          printf '%s  %s\n' "$checksum" "work/openwrt/$E5_WRT_TARBALL" | sha256sum --check
+          docker import --platform linux/arm64 "work/openwrt/$E5_WRT_TARBALL" "$E5_WRT_BASE_IMAGE"
           python3 openwrt/tests/flash-diagnostics.py
-          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/gpt-plan.py
+          E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 openwrt/tests/gpt-plan.py
           python3 openwrt/tests/voice-audio.py
           python3 openwrt/tests/dual-sms.py
           python3 openwrt/tests/dual-sms-send.py
           python3 openwrt/tests/sim-probe.py
-          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/sim-lock.py
+          E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 openwrt/tests/sim-lock.py
           node openwrt/tests/luci-sim-slots.cjs
           python3 magisk/tests.py
           python3 rootfs/tests/sd-registry.py
           python3 rootfs/tests/early-sd-firmware.py
-          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 rootfs/tests/sd-write.py
+          E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 rootfs/tests/sd-write.py
           python3 rootfs/tests/voice-state.py
           python3 rootfs/tests/modem-coldboot.py
           python3 tools/tests/ci-release.py
           python3 tools/tests/openwrt-package-state.py
           python3 ci/infoscreen-plugins/tools/check.py
           if [ -f ci/infoscreen/tests/network-checks.sh ]; then
-            E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" bash ci/infoscreen/tests/network-checks.sh
+            E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" bash ci/infoscreen/tests/network-checks.sh
             python3 ci/infoscreen/tests/usb-reset.py
           fi
       - name: Build ARM64 toolchain container
@@ -144,21 +153,21 @@ jobs:
         env:
           E5_RELEASE: '1'
         run: bash upstream/build.sh
-      - name: Restore patched OpenWrt packages
+      - name: Restore patched distribution packages
         id: packages
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             out/openwrt/*.apk
             out/openwrt/e5-modemmanager-build.json
-          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('tools/openwrt-package-state.py', 'openwrt/tests/voice-identity.py', 'openwrt/tests/sim-power.py', 'openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_DISTRO }}-${{ env.E5_WRT_VER }}-${{ hashFiles('tools/openwrt-package-state.py', 'openwrt/wrt-distro.sh', 'openwrt/tests/voice-identity.py', 'openwrt/tests/sim-power.py', 'openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
       - name: Compile patched ModemManager and BlueZ
         if: steps.packages.outputs.cache-hit != 'true'
         run: |
           bash openwrt/build-modemmanager.sh
           bash openwrt/build-bluez.sh
           # This volume belongs to this ephemeral runner. Free it before image assembly.
-          docker volume rm e5-openwrt-src
+          docker volume rm "e5-$E5_WRT_DISTRO-src"
       - name: Save patched packages before image assembly
         if: steps.packages.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

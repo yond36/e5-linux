@@ -77,3 +77,23 @@ GitHub Actions 编译并发布主线刷入包和 Magisk ZIP，编译时间为 UT
 硬件服务在 `overlay/`，共享脚本在 `../rootfs/overlay/opt/e5/`，Unisoc MM 补丁在
 `../rootfs/deb-patches/`。旧 5.15／vendor 和 userdata 目录安装保留作兼容路径，
 当前一键包使用主线内核、推荐 SD 安装。
+
+## 基于 ImmortalWrt 构建
+
+同一套脚本可以改用 **ImmortalWrt** 作基础系统（默认仍是 OpenWrt）：
+
+```sh
+E5_WRT_DISTRO=immortalwrt E5_WRT_VER=25.12.2 openwrt/build-rootfs.sh   # 二者即默认值
+```
+
+产物改名成 `e5-immortalwrt-25.12.2-*`（OpenWrt 下仍是 `e5-openwrt-*`），内核、信息屏、
+电话、ModemManager／BlueZ 补丁都不变。ImmortalWrt 25.12.2 不编译 OpenWrt 的
+`video` feed，信息屏的图形栈（cage、cog、WPE WebKit、Mesa、Wayland）因此取自**同版本
+OpenWrt** 的 video feed：两边都由同一棵树构建，musl 1.2.5／gcc 14.3 与同名包版本
+一致，且 ImmortalWrt 的 rootfs 自带 OpenWrt 的签名密钥（`openwrt-25.12.pem`），
+可以直接安装。该 feed 会写进镜像的 `/etc/apk/repositories.d/customfeeds.list`，
+设备上后续 `apk` 仍能解析这些包。`libgst1gl` 与 `gst1-mod-opengl`（WPE WebKit 的
+依赖）只在 OpenWrt 的 packages feed 里，按固定 SHA-256 下载后安装。
+
+GitHub Actions 上编译时在输入里选 `wrt_distro=immortalwrt`（该分支的默认值）；
+OpenWrt 与 ImmortalWrt 是同一套脚本的两个选项（`openwrt/wrt-distro.sh`）。

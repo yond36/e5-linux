@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-IMG=${1:-$(ls -t "$TOP"/out/openwrt/e5-openwrt-*.ext4.gz 2>/dev/null | head -1)}
+IMG=${1:-$(ls -t "$TOP"/out/openwrt/e5-*.ext4.gz 2>/dev/null | head -1)}
 [ -f "$IMG" ] || { echo "no image -- run E5_STANDALONE=1 openwrt/build-rootfs.sh first" >&2; exit 1; }
 [ -z "$KEY" ] || [ ${#KEY} -ge 8 ] || { echo "a WPA2 key has at least 8 characters" >&2; exit 1; }
 echo "== $(basename "$IMG") ($(du -h "$IMG" | cut -f1))"

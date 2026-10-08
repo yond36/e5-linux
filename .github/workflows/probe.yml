@@ -1,0 +1,104 @@
+name: Probe the base packages
+# A quick check of the package layer before the hours a release takes: it
+# imports the base root filesystem of the distribution selected below
+# (openwrt/wrt-distro.sh), adds OpenWrt's video feed -- ImmortalWrt builds
+# none, and the info screen runs on it -- and installs the packages
+# openwrt/build-rootfs.sh installs, including the two GStreamer GL packages
+# it takes as pinned files.
+run-name: Probe ${{ inputs.wrt_distro || 'immortalwrt' }} packages · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      wrt_distro:
+        description: Base distribution to probe
+        type: choice
+        options: [immortalwrt, openwrt]
+        default: immortalwrt
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TZ: CST-8
+  E5_WRT_DISTRO: ${{ inputs.wrt_distro || 'immortalwrt' }}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Import the base root filesystem
+        run: |
+          set -euo pipefail
+          . openwrt/wrt-distro.sh
+          echo "probing $E5_WRT_NAME $E5_WRT_VER"
+          mkdir -p work/openwrt
+          curl -fsSL --retry 5 "$E5_WRT_URL/$E5_WRT_TARBALL" -o "work/openwrt/$E5_WRT_TARBALL"
+          curl -fsSL --retry 5 "$E5_WRT_URL/sha256sums" -o work/openwrt/sha256sums
+          checksum=$(awk -v file="$E5_WRT_TARBALL" '$2 == "*" file || $2 == file { print $1 }' work/openwrt/sha256sums)
+          [ -n "$checksum" ] || { echo "::error::no checksum for $E5_WRT_TARBALL"; exit 1; }
+          printf '%s  %s\n' "$checksum" "work/openwrt/$E5_WRT_TARBALL" | sha256sum --check
+          docker import --platform linux/arm64 "work/openwrt/$E5_WRT_TARBALL" "$E5_WRT_BASE_IMAGE"
+      - name: Fetch the pinned GStreamer GL files
+        run: |
+          set -euo pipefail
+          . openwrt/wrt-distro.sh
+          mkdir -p work/extra
+          gl=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
+          printf '%s\n' \
+            9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk \
+            14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk |
+          while read -r sum f; do
+              curl -fsSL --retry 5 "$gl/$f" -o "work/extra/$f"
+              got=$(sha256sum "work/extra/$f" | cut -d" " -f1)
+              [ "$got" = "$sum" ] || { echo "::error::checksum mismatch for $f"; exit 1; }
+          done
+      - name: Install what the info screen needs
+        run: |
+          set -euo pipefail
+          . openwrt/wrt-distro.sh
+          video=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/video/packages.adb
+          docker run --rm -v "$PWD/work/extra:/in/extra:ro" -e VIDEO_FEED="$video" \
+            "$E5_WRT_BASE_IMAGE" /bin/sh -euc '
+              # the package sequence of openwrt/build-rootfs.sh, without the
+              # packages it builds itself (ModemManager, BlueZ) and the tree
+              mkdir -p /var/lock /var/run /tmp
+              apk update >/dev/null
+              apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils \
+                  luci-proto-modemmanager dbus-utils alsa-utils curl >/dev/null
+              apk add pulseaudio-daemon-avahi pulseaudio-tools >/dev/null
+              apk add python3 >/dev/null
+              apk add luci-i18n-base-zh-cn >/dev/null
+              # (ImmortalWrt installs the translation of attended sysupgrade as
+              # its own package, and that one depends on the app: it goes first)
+              apk del luci-i18n-attendedsysupgrade-zh-cn >/dev/null 2>&1 || true
+              apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
+              grep -q "^P:luci-app-attendedsysupgrade$" /lib/apk/db/installed && { echo "attendedsysupgrade is still installed" >&2; exit 1; }
+              # (the theme: from the feed when the distribution has it --
+              # ImmortalWrt does, OpenWrt takes it as a pinned file)
+              if apk search -e luci-theme-argon >/dev/null 2>&1; then
+                  apk add luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn >/dev/null
+              fi
+              echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed)"
+              # (the info screen packages: a base with no video feed of its own
+              # gets the OpenWrt one added to the image repositories)
+              printf "%s\n" "$VIDEO_FEED" >> /etc/apk/repositories.d/customfeeds.list
+              apk update >/dev/null
+              for p in cage cog seatd libmesa-panfrost; do
+                  apk search -e "$p" >/dev/null || { echo "the video feed has no $p" >&2; exit 1; }
+              done
+              apk add /in/extra/libgst1gl-1.26.4-r1.apk /in/extra/gst1-mod-opengl-1.26.4-r1.apk \
+                  cage cog seatd libmesa-panfrost >/dev/null
+              echo "== installed"
+              for p in cage cog libcogcore libwpewebkit libgst1gl gst1-mod-opengl libmesa-panfrost \
+                       seatd libseat libwayland libxkbcommon wlroots xkeyboard-config harfbuzz \
+                       libepoxy libwpe wpebackend-fdo libdisplay-info libgst1video; do
+                  v=$(sed -n "/^P:$p$/{n;s/^V://p}" /lib/apk/db/installed)
+                  [ -n "$v" ] || { echo "not installed: $p" >&2; exit 1; }
+                  echo "   $p $v"
+              done
+              echo "== the package layer is complete"
+          '

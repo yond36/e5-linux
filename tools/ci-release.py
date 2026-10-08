@@ -16,6 +16,18 @@ import zipfile
 TOP = Path(__file__).resolve().parents[1]
 UTC8 = timezone(timedelta(hours=8))
 RELEASE = TOP / 'out/release'
+# The distributions the tree is built from (openwrt/wrt-distro.sh): the name in
+# the file names and the one in the release notes.
+DISTROS = {'openwrt': 'OpenWrt', 'immortalwrt': 'ImmortalWrt'}
+
+
+def distro(info):
+    """The distribution this build is based on (a test fixture has none)."""
+    return info.get('wrt_distro') or 'openwrt'
+
+
+def distro_name(info):
+    return DISTROS.get(distro(info), 'OpenWrt')
 
 
 def digest(stream):
@@ -49,6 +61,9 @@ def prepare():
     ver = os.environ.get('E5_WRT_VER', '25.12.5')
     if not re.fullmatch(r'\d+\.\d+\.\d+', ver):
         raise ValueError('invalid OpenWrt version')
+    dist = os.environ.get('E5_WRT_DISTRO', 'openwrt')
+    if dist not in DISTROS:
+        raise ValueError('invalid distribution: ' + dist)
     sources = {name: {'repository': repo, 'revision': revision(path)} for name, repo, path in [
         ('e5-linux', os.environ.get('GITHUB_REPOSITORY', 'Enceka/e5-linux'), TOP),
         ('kernel', 'Enceka/linux-lts-e5', TOP / 'linux-lts-e5'),
@@ -57,7 +72,7 @@ def prepare():
     ]}
     RELEASE.mkdir(parents=True, exist_ok=True)
     info = {'build_epoch': epoch, 'build_started_at': started.isoformat(timespec='seconds'),
-            'timestamp': stamp, 'openwrt_version': ver, 'sources': sources,
+            'timestamp': stamp, 'openwrt_version': ver, 'wrt_distro': dist, 'sources': sources,
             'bootstrap_sha256': os.environ.get('E5_CI_INPUTS_SHA256'),
             'run_url': os.environ.get('E5_RUN_URL')}
     (RELEASE / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
@@ -92,7 +107,7 @@ def audit_root(info):
     for name in ('vendor-start.sh', 'e5-modem-coldboot'):
         expected['opt/e5/' + name] = file_digest(TOP / 'rootfs/overlay/opt/e5' / name)
     found, versions, modules = {}, {}, set()
-    rootfs = TOP / 'work/openwrt' / f'e5-openwrt-{info["openwrt_version"]}-generic-rootfs.tar.gz'
+    rootfs = TOP / 'work/openwrt' / f'e5-{distro(info)}-{info["openwrt_version"]}-generic-rootfs.tar.gz'
     if not rootfs.is_file():
         raise ValueError(f'root filesystem archive was not built: {rootfs}; inspect bundle-build.log for the original failure')
     forbidden = re.compile(r'^(?:lib/firmware/(?:wcnmodem|gnssmodem|l_agdsp|wifi_board|sprd/)|'
@@ -137,7 +152,7 @@ def verify():
                        ('infoscreen', TOP / 'ci/infoscreen'), ('plugins', TOP / 'ci/infoscreen-plugins')]:
         if revision(path) != info['sources'][name]['revision']:
             raise ValueError('source revision changed: ' + name)
-    glob = f'e5-openwrt-flash-{info["openwrt_version"]}-mainline-{info["timestamp"]}-*.tar.gz'
+    glob = f'e5-{distro(info)}-flash-{info["openwrt_version"]}-mainline-{info["timestamp"]}-*.tar.gz'
     candidates = list((TOP / 'out/openwrt').glob(glob))
     if len(candidates) != 1:
         raise ValueError('expected exactly one completed bundle for this build timestamp')
@@ -169,7 +184,7 @@ def verify():
     if listed != expected_members:
         raise ValueError('bundle SHA256SUMS mismatch')
     for name, path in [('files/boot.img', TOP / 'work/boot-linux-slotb-bundle-mainline.img'),
-                       ('files/openwrt.ext4.gz', TOP / 'out/openwrt' / f'e5-openwrt-{info["openwrt_version"]}-generic.ext4.gz')]:
+                       ('files/openwrt.ext4.gz', TOP / 'out/openwrt' / f'e5-{distro(info)}-{info["openwrt_version"]}-generic.ext4.gz')]:
         if members[name] != file_digest(path):
             raise ValueError('bundle uses a different build output: ' + name)
     boot = json.loads(data['files/boot.json'])
@@ -212,15 +227,15 @@ def verify():
     refs = '\n'.join(f'- {name}: `{item["repository"]}@{item["revision"]}`' for name, item in info['sources'].items())
     (RELEASE / 'release-notes.md').write_text(
         f'编译时间（UTC+8）：**{info["build_started_at"]}**\n\n'
-        f'OpenWrt {info["openwrt_version"]} · 内核 `{info["kernel_release"]}` · '
+        f'{distro_name(info)} {info["openwrt_version"]} · 内核 `{info["kernel_release"]}` · '
         f'信息屏 {info["infoscreen_version"]} · 电话插件 {info["phone_version"]}\n\n'
         '下载 ZIP 或 TAR.GZ，解压后运行 `flash.cmd`（Windows）或 `./flash.sh`（macOS/Linux）。'
-        '已安装 OpenWrt 使用 `--update` 保留设置。刷入说明在包内 README。\n\n'
+        f'已安装 {distro_name(info)} 使用 `--update` 保留设置。刷入说明在包内 README。\n\n'
         'Magisk ZIP 用于已 root Android 手动切回已安装的 Linux，在模块列表点击「操作」。\n\n'
         '镜像不含设备固件和 Android vendor 运行库；安装器从目标设备提取。'
         'CI 已验证文件和模块一致性，硬件实测仍需在 E5 上进行。\n\n'
         f'源码版本：\n\n{refs}\n\n[构建记录]({info.get("run_url")})\n')
-    outputs({'bundle_name': stem, 'release_title': 'E5 OpenWrt ' + info['build_started_at']})
+    outputs({'bundle_name': stem, 'release_title': f'E5 {distro_name(info)} ' + info['build_started_at']})
     print('Verified release:', stem)
 
 

@@ -9,5 +9,12 @@ set luci.main.lang='zh_cn'
 set luci.main.mediaurlbase='/luci-static/argon'
 commit luci
 UCI
+# (ImmortalWrt's 99-default-settings sets luci.main.lang=auto at first boot
+# unless its own marker is set: set it, so the language above stays; on OpenWrt
+# the section does not exist and nothing happens)
+if uci -q get system.@imm_init[0] >/dev/null; then
+	uci -q set system.@imm_init[0].lang='1'
+	uci -q commit system
+fi
 mkdir -p /etc/e5 && touch /etc/e5/configured.luci
 exit 0

@@ -16,7 +16,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
 MODE=
 case "${1:-}" in --try|--switch) MODE=$1; shift ;; esac
-T=${1:-$(ls -t "$TOP"/out/openwrt/e5-openwrt-*-rootfs.tar.gz 2>/dev/null | head -1)}
+T=${1:-$(ls -t "$TOP"/out/openwrt/e5-*-rootfs.tar.gz 2>/dev/null | head -1)}
 [ -f "$T" ] || { echo "no tarball -- run openwrt/build-rootfs.sh first" >&2; exit 1; }
 IP=${E5_HOST_IP:-192.168.9.2}
 PORT=${E5_HTTP_PORT:-8791}

@@ -1,16 +1,18 @@
 #!/bin/bash
-# Build OpenWrt's modemmanager package with the E5's unisoc plugin.
+# Build the distribution's modemmanager package with the E5's unisoc plugin.
 #
 #   openwrt/build-modemmanager.sh        -> out/openwrt/modemmanager-*.apk
 #
-# OpenWrt 25.12 ships ModemManager 1.24.0, the version rootfs/deb-patches/
+# OpenWrt and ImmortalWrt 25.12 both ship ModemManager 1.24.0, the version
+# rootfs/deb-patches/
 # modemmanager-0[1-6]-*.patch are written against, so the Debian image and the
 # OpenWrt one run the same plugin (docs/FINDINGS.md 37).  The patches go into
 # the feed package's patches/ after OpenWrt's own (0001-0004, which they stack
 # on cleanly), and patches/modemmanager-package-*.patch adjusts the package's
 # OpenWrt glue (its hotplug helpers drop virtual netdevs, and sipa_eth0 is one).
 #
-# Built from OpenWrt's source tree at the release tag, in a container of the
+# Built from the distribution's source tree at the release tag (E5_WRT_GIT,
+# openwrt/wrt-distro.sh), in a container of the
 # host's own architecture: the release SDK exists only as an x86_64 program,
 # which Docker on an arm64 host can run only emulated -- far too slow (hours,
 # for glib2 alone).  The buildroot builds its cross toolchain on any host, so
@@ -19,9 +21,10 @@
 # out for the same toolchain (gcc, musl) as the repository's packages it is
 # installed with.
 #
-# The tree lives in the Docker volume e5-openwrt-src and is kept between runs:
-# the first run builds the host tools and the toolchain (tens of minutes), a
-# later one only ModemManager.  `docker volume rm e5-openwrt-src` starts over.
+# The tree lives in the Docker volume e5-<distribution>-src and is kept between
+# runs: the first run builds the host tools and the toolchain (tens of
+# minutes), a later one only ModemManager.  `docker volume rm e5-openwrt-src`
+# (or e5-immortalwrt-src) starts over.
 #
 # Configuration: no QMI, MBIM or QRTR (this modem speaks AT only, and without
 # them the package does not pull libqmi/libmbim/libqrtr in); AT commands over
@@ -45,12 +48,15 @@ set -euo pipefail
 # 9: discard snapshots taken before a dial completed; retain undecodable calls.
 # 10: skip absent SIM power-up and restore the selected AT context.
 E5REV=10
-VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
+# the distribution and its release: openwrt 25.12.5, immortalwrt 25.12.2 (the
+# package is built from that distribution's own tree, feeds and toolchain)
+. "$HERE/wrt-distro.sh"
+VER=$E5_WRT_VER
+URL=$E5_WRT_URL
 WORK="$TOP/work/openwrt"
 OUT="$TOP/out/openwrt"
-URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
 mkdir -p "$WORK" "$OUT"
 
 for f in config.buildinfo feeds.buildinfo; do
@@ -73,8 +79,9 @@ cp "$HERE"/patches/modemmanager-package-*.patch "$WORK/patches/pkg/"
 DOCKER=${E5_DOCKER:-docker}
 case "$(uname -m)" in x86_64) PLAT=linux/amd64;; *) PLAT=linux/arm64;; esac
 Z=; [ "$DOCKER" = podman ] && Z=,z
-$DOCKER run --rm --platform $PLAT -v e5-openwrt-src:/build \
+$DOCKER run --rm --platform $PLAT -v "$E5_WRT_SRC_VOLUME":/build \
     -v "$WORK":/work:ro$Z -v "$OUT":/out${Z:+:z} -e VER="$VER" -e E5REV="$E5REV" \
+    -e WRT_GIT="$E5_WRT_GIT" -e WRT_DISTRO="$E5_WRT_DISTRO" \
     -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
     debian:trixie bash -euc '
 export DEBIAN_FRONTEND=noninteractive
@@ -86,7 +93,7 @@ apt-get install -y -qq --no-install-recommends build-essential ca-certificates c
 # volume, which is case-sensitive (a macOS bind mount is not)
 export FORCE_UNSAFE_CONFIGURE=1
 cd /build
-[ -d openwrt/.git ] || git clone -q --depth 1 --branch v$VER https://git.openwrt.org/openwrt/openwrt.git openwrt
+[ -d openwrt/.git ] || git clone -q --depth 1 --branch v$VER "$WRT_GIT" openwrt
 cd openwrt
 # the feeds at the commits the release was built from
 cp /work/feeds.buildinfo feeds.conf
@@ -112,7 +119,16 @@ echo "modemmanager release $rel -> $((rel + 900 + E5REV)); patches:"; ls $P/patc
 {
     # (not CONFIG_BUILDBOT: on the release builders it also builds LLVM for
     # BPF, which nothing here needs)
-    grep -E "^CONFIG_(TARGET_|GCC_|LIBC|MUSL|BINUTILS|KERNEL_|USE_|PKG_|SIGNED)" /work/config.buildinfo || true
+    grep -E "^CONFIG_(TARGET_|GCC_|LIBC_|MUSL_|BINUTILS_|KERNEL_|USE_|PKG_|SIGNED)" /work/config.buildinfo > /tmp/relconfig || true
+    # (ImmortalWrt keeps the debug options of its release build in
+    # config.buildinfo; the kernel built below is only there for the kmod
+    # packages a dependency asks for, so BTF -- and the pahole it wants -- or
+    # ftrace would only cost time)
+    if [ "$WRT_DISTRO" = immortalwrt ]; then
+        grep -vE "^CONFIG_KERNEL_(DEBUG_INFO|BPF|FTRACE|KPROBES|KPROBE_EVENTS|MODULE_ALLOW_BTF_MISMATCH|NETKIT|PERF_EVENTS|XDP_SOCKETS)" /tmp/relconfig || true
+    else
+        cat /tmp/relconfig
+    fi
     echo "CONFIG_BPF_TOOLCHAIN_NONE=y"
     echo "# CONFIG_BPF_TOOLCHAIN_BUILD_LLVM is not set"
     echo "CONFIG_PACKAGE_modemmanager=m"

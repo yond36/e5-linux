@@ -91,3 +91,27 @@ Hardware/service implementation lives in `overlay/`, the shared scripts in
 `../rootfs/overlay/opt/e5/`, and the Unisoc MM patches in `../rootfs/deb-patches/`.
 The older 5.15/vendor and userdata directory forms are retained compatibility
 paths; the current one-click bundle uses mainline and SD installation.
+
+## Building on ImmortalWrt
+
+The same scripts build on **ImmortalWrt** instead of OpenWrt (still the default):
+
+```sh
+E5_WRT_DISTRO=immortalwrt E5_WRT_VER=25.12.2 openwrt/build-rootfs.sh   # both are the defaults
+```
+
+Artifacts are then named `e5-immortalwrt-25.12.2-*` (OpenWrt keeps
+`e5-openwrt-*`); the kernel, info screen, telephony and the ModemManager/BlueZ
+patches are unchanged. ImmortalWrt 25.12.2 does not build OpenWrt's `video`
+feed, so the screen's graphics stack (cage, cog, WPE WebKit, Mesa, Wayland)
+comes from the OpenWrt release of the same version: both are built from the
+same tree with the same musl 1.2.5/gcc 14.3, and the ImmortalWrt root
+filesystem carries OpenWrt's signing key (`openwrt-25.12.pem`), so that feed's
+packages install. The feed is written into the image's
+`/etc/apk/repositories.d/customfeeds.list`, so apk on the device still resolves
+those packages. `libgst1gl` and `gst1-mod-opengl` (dependencies of WPE WebKit)
+live in OpenWrt's packages feed, not its video feed, and are installed from
+files pinned by SHA-256.
+
+On GitHub Actions, pick `wrt_distro=immortalwrt` (the default on this branch);
+OpenWrt and ImmortalWrt are two options of one build (`openwrt/wrt-distro.sh`).

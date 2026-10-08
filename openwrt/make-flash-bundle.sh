@@ -1,11 +1,13 @@
 #!/bin/bash
 # Build the flash package for other people's E5s:
-# out/openwrt/e5-openwrt-flash-<version>-<timestamp>-<git>.tar.gz, unpacked and run as
+# out/openwrt/<e5-openwrt|e5-immortalwrt>-flash-<version>-<timestamp>-<git>.tar.gz,
+# unpacked and run as
 # ./flash.sh (openwrt/bundle/README.md is its manual).
 #
 #   openwrt/make-flash-bundle.sh
 #   E5_MAINLINE=1 openwrt/make-flash-bundle.sh    the mainline 6.18 kernel instead of 5.15:
-#       e5-openwrt-flash-<version>-mainline-<timestamp>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
+#       <e5-openwrt|e5-immortalwrt>-flash-<version>-mainline-<timestamp>-<git>; the kernel of
+#       E5_RELEASE=1 upstream/build.sh
 #       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
 #       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
 #   E5_IMAGE_FROM=<openwrt.ext4.gz> (with E5_MAINLINE=1)   no image rebuilt (build-rootfs.sh needs docker):
@@ -14,7 +16,7 @@
 #
 # What goes in, and what does not:
 #
-#  * the generic OpenWrt image (openwrt/build-rootfs.sh with E5_STANDALONE=1
+#  * the generic distribution image (openwrt/build-rootfs.sh with E5_STANDALONE=1
 #    E5_DEVICE_FILES=0, built here when out/openwrt has none): none of this
 #    device's files -- no vendor firmware, no Android vendor subset, which are
 #    proprietary and carry the unit's identity (BT address, serial number);
@@ -35,10 +37,14 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
-VER=${E5_WRT_VER:-25.12.5}
+# the distribution and its release: openwrt 25.12.5, immortalwrt 25.12.2
+. "$HERE/wrt-distro.sh"
+VER=$E5_WRT_VER
+WRT=$E5_WRT_NAME
+WRT_NAME=OpenWrt; [ "$E5_WRT_DISTRO" = immortalwrt ] && WRT_NAME=ImmortalWrt
 OUT="$TOP/out/openwrt"
 WORK="$TOP/work/openwrt"
-IMG="$OUT/e5-openwrt-$VER-generic.ext4.gz"
+IMG="$OUT/$WRT-$VER-generic.ext4.gz"
 KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 STOCK_BOOT=${E5_STOCK_BOOT:-$TOP/dumps/boot_b.img}
 MISC_HEAD=${E5_MISC_HEAD:-$TOP/dumps/misc-head.bin}
@@ -55,11 +61,11 @@ t = datetime.fromtimestamp(int(sys.argv[1]), timezone(timedelta(hours=8)))
 print(t.strftime('%Y%m%d-%H%M%S'), t.isoformat(timespec='seconds'))
 PY
 )
-NAME=e5-openwrt-flash-$VER-$STAMP-$GIT
+NAME=$WRT-flash-$VER-$STAMP-$GIT
 MAINLINE=${E5_MAINLINE:-}
 KOUT=$TOP/upstream/out-release
 if [ -n "$MAINLINE" ]; then
-    NAME=e5-openwrt-flash-$VER-mainline-$STAMP-$GIT
+    NAME=$WRT-flash-$VER-mainline-$STAMP-$GIT
     KERNEL=$KOUT/Image.lk
     [ -f "$KERNEL" ] || { echo "no $KERNEL: E5_RELEASE=1 upstream/build.sh" >&2; exit 1; }
     # (grep -c, not grep -q: see the kernel check below)
@@ -88,7 +94,7 @@ image_files() {
         (cd "$d/r" && find . | sed 's|^\./||')
         rm -rf "$d"
     else
-        tar -tzf "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz"
+        tar -tzf "$WORK/$WRT-$VER-generic-rootfs.tar.gz"
     fi
 }
 image_files > "$S0/files"
@@ -143,8 +149,8 @@ cp "$HERE/device-install-image.sh" "$HERE/device-flash-boot.sh" "$HERE/bundle/co
 cp "$TOP/tools/e5-telnet.py" "$TOP/tools/sprd-bt-config.py" "$P/scripts/tools/"
 cp -R "$TOP/tools/vbc-profile" "$P/scripts/tools/"
 find "$P" \( -name .DS_Store -o -name __pycache__ \) -prune -exec rm -rf {} +
-printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
-    "$BUILD_TIME" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
+printf "%s-flash %s (%s %s, e5-linux %s, kernel %s)\n" \
+    "$WRT" "$BUILD_TIME" "$WRT_NAME" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
 (cd "$P" && find files scripts flash.py flash.sh flash.cmd -type f | sort | while read -r f; do
     printf "%s  %s\n" "$({ shasum -a 256 "$f" 2>/dev/null || sha256sum "$f"; } | cut -d' ' -f1)" "$f"
 done > SHA256SUMS)

@@ -1,13 +1,16 @@
 #!/bin/bash
-# Build the E5's OpenWrt tree: out/openwrt/e5-openwrt-<version>-rootfs.tar.gz
+# Build the E5's userspace tree: out/openwrt/${E5_WRT_NAME}-<version>-rootfs.tar.gz
 #
 #   openwrt/build-modemmanager.sh      (once, and after a ModemManager patch changes)
 #   openwrt/build-rootfs.sh
 #
-# The tree is OpenWrt's own armsr/armv8 root filesystem (arm64, musl) with the
-# E5's parts added -- no kernel, no kmods: the E5 boots its vendor kernel from
-# slot b's boot image, and the initramfs starts this tree from a directory of
-# the Debian root image (/openwrt, see README.md).  Added:
+# The tree is the distribution's own armsr/armv8 root filesystem (arm64,
+# musl) with the E5's parts added -- no kernel, no kmods: the E5 boots its
+# vendor kernel from slot b's boot image, and the initramfs starts this tree
+# from a directory of the Debian root image (/openwrt, see README.md).
+# OpenWrt and ImmortalWrt are both 25.12-based and use apk; openwrt/wrt-distro.sh
+# selects which (E5_WRT_DISTRO, default openwrt) and what it is called in file
+# names (e5-openwrt-* or e5-immortalwrt-*).  Added:
 #
 #  * packages from OpenWrt's repository: the access point (wpad-basic-mbedtls,
 #    wifi-scripts, iw), bash, util-linux mount, ip-full, LuCI's ModemManager
@@ -65,13 +68,15 @@
 # E5_IMAGE_MB sets the image's size (default 1024).  Needs Docker with arm64
 # (native on Apple silicon).
 set -euo pipefail
-VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
+# the distribution and its release: openwrt 25.12.5, immortalwrt 25.12.2
+. "$HERE/wrt-distro.sh"
+VER=$E5_WRT_VER
+URL=$E5_WRT_URL
+TARBALL=$E5_WRT_TARBALL
 WORK="$TOP/work/openwrt"
 OUT="$TOP/out/openwrt"
-URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
-TARBALL=openwrt-$VER-armsr-armv8-rootfs.tar.gz
 BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
 # the info screen, from its own repository, when it is there (E5_INFOSCREEN=
 # empty leaves it out)
@@ -79,7 +84,7 @@ INFOSCREEN=${E5_INFOSCREEN-$TOP/../e5-infoscreen}
 [ -n "$INFOSCREEN" ] && [ -f "$INFOSCREEN/packages.txt" ] && [ -d "$INFOSCREEN/root" ] || INFOSCREEN=""
 SCREEN_PLUGINS=${E5_INFOSCREEN_PLUGINS-$TOP/../infoscreen-plugins}
 [ -n "$SCREEN_PLUGINS" ] && [ -d "$SCREEN_PLUGINS/plugins/phone" ] || SCREEN_PLUGINS=""
-NAME=e5-openwrt-$VER-rootfs.tar.gz
+NAME=$E5_WRT_NAME-$VER-rootfs.tar.gz
 STANDALONE=${E5_STANDALONE:-}
 DEVICE_FILES=${E5_DEVICE_FILES:-1}
 IMAGE_MB=${E5_IMAGE_MB:-1024}
@@ -89,20 +94,56 @@ KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
 python3 "$TOP/tools/openwrt-package-state.py" check "$VER"
 
-# the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
-ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7
-ARGON_APKS="c5f0e3a55ef96213884184be9aeaadc8586418986c4dde1ff1866be5e938aaef luci-theme-argon-2.4.7-r1.apk
+# The Argon theme and the GStreamer GL pieces WPE WebKit asks for are not in
+# every feed: OpenWrt takes the three theme packages and the GL ones from
+# files pinned here; ImmortalWrt builds the theme itself (THEME_LIST) and
+# builds no GL ones at all -- no Mesa, no video feed -- so those two come from
+# OpenWrt's packages feed (E5_WRT_VIDEO_*) for the video feed's libwpewebkit.
+ARGON_APKS=
+GL_APKS=
+THEME_LIST=
+EXTRA_LIST=
+GL_LIST=
+if [ "$E5_WRT_DISTRO" = openwrt ]; then
+    # the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
+    ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7
+    ARGON_APKS="c5f0e3a55ef96213884184be9aeaadc8586418986c4dde1ff1866be5e938aaef luci-theme-argon-2.4.7-r1.apk
 506e2bc4bef7d40fab051bb38902f71a8af0356ebe765f01b1808f6d2ce8bf8f luci-app-argon-config-2.4.7-r1.apk
 00163d6b9d7f1fccae84bd220c6f3c9a4f78fe063b1d12408127d36bfe38dd7e luci-i18n-argon-config-zh-cn-26.103.13761.3e099a3.apk"
+else
+    # (ImmortalWrt's luci feed carries the theme itself)
+    THEME_LIST="luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn"
+    if [ -n "$INFOSCREEN" ]; then
+        GL_APKS="9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk
+14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk"
+    fi
+fi
 mkdir -p "$WORK/extra"
 rm -f "$WORK/extra/"*.apk.part
-printf "%s\n" "$ARGON_APKS" | while read -r sum f; do
-    [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
-    got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
-    [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
-done
-# (only the pinned ones go in)
-EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
+if [ -n "$ARGON_APKS" ]; then
+    printf "%s\n" "$ARGON_APKS" | while read -r sum f; do
+        [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
+        got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
+        [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
+    done
+    # (only the pinned ones go in)
+    EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
+fi
+if [ -n "$GL_APKS" ]; then
+    GL_URL=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
+    printf "%s\n" "$GL_APKS" | while read -r sum f; do
+        [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$GL_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
+        got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
+        [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
+    done
+    GL_LIST=$(printf "%s\n" "$GL_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
+fi
+# (the feed the screen's graphics stack comes from when the base distribution
+# builds none: ImmortalWrt, see wrt-distro.sh)
+VIDEO_FEED=
+if [ "$E5_WRT_DISTRO" = immortalwrt ] && [ -n "$INFOSCREEN" ]; then
+    VIDEO_FEED=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/video/packages.adb
+fi
 
 ls "$OUT"/bluez-daemon-*.apk >/dev/null 2>&1 || {
     echo "no BlueZ package in $OUT -- run openwrt/build-bluez.sh first" >&2; exit 1; }
@@ -153,10 +194,10 @@ n=$(ls "$SA/audio" | grep -c '\.ko$' || true)
 [ "$n" = 24 ] || { echo "expected the 24 audio modules in $KBUILD, found $n (kernel/build-linux.sh)" >&2; exit 1; }
 strings "$SA/audio/snd-soc-sprd-card.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1 > "$SA/audio/release"
 if [ -n "$STANDALONE" ]; then
-    NAME=e5-openwrt-$VER-standalone-rootfs.tar.gz
+    NAME=$E5_WRT_NAME-$VER-standalone-rootfs.tar.gz
     [ -f "$FIRMWARE/regulatory.db" ] || { echo "no $FIRMWARE/regulatory.db" >&2; exit 1; }
     if [ "$DEVICE_FILES" = 0 ]; then
-        NAME=e5-openwrt-$VER-generic-rootfs.tar.gz
+        NAME=$E5_WRT_NAME-$VER-generic-rootfs.tar.gz
         # Debian's wireless-regdb, signed with the key this kernel trusts: no device's
         cp "$FIRMWARE/regulatory.db" "$FIRMWARE/regulatory.db.p7s" "$SA/firmware/"
     else
@@ -197,14 +238,14 @@ fi
 
 # (the standalone tree is only the image's source)
 TAROUT=$OUT; [ -z "$STANDALONE" ] || TAROUT=$WORK
-docker import --platform linux/arm64 "$WORK/$TARBALL" e5-openwrt-base:$VER >/dev/null
+docker import --platform linux/arm64 "$WORK/$TARBALL" "$E5_WRT_BASE_IMAGE" >/dev/null
 # Packages OpenWrt's repository dropped -- cog and WPE WebKit left 25.12.5's feed when it was regenerated on
 # 2026-09-28 -- are taken from the last image that had them: their files, apk database entries and
 # dependencies, out of that image's rootfs archive into $WORK/transplant once (kept there).  The build uses
 # them only while the repository has none of them.
 TP="$WORK/transplant"
-if [ ! -f "$TP/installed" ] && [ -f "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" ]; then
-    python3 - "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" "$TP" cog libcogcore libwpewebkit <<'PY'
+if [ ! -f "$TP/installed" ] && [ -f "$WORK/$E5_WRT_NAME-$VER-generic-rootfs.tar.gz" ]; then
+    python3 - "$WORK/$E5_WRT_NAME-$VER-generic-rootfs.tar.gz" "$TP" cog libcogcore libwpewebkit <<'PY'
 import os, sys, tarfile
 src, tp, names = sys.argv[1], sys.argv[2], set(sys.argv[3:])
 t = tarfile.open(src)
@@ -252,8 +293,10 @@ docker run --rm --platform linux/arm64 \
     -v "$WORK/e5-sim-probe":/in/e5-sim-probe:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
+    -e THEME_LIST="$THEME_LIST" -e GL_LIST="$GL_LIST" -e VIDEO_FEED="$VIDEO_FEED" \
+    -e WRT_NAME="$E5_WRT_NAME" -e WRT_DISTRO="$E5_WRT_DISTRO" -e WRT_VER="$VER" \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
-    e5-openwrt-base:$VER /bin/sh -euc '
+    "$E5_WRT_BASE_IMAGE" /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
 # ModemManager first, from its local file (unsigned): its release is above the
@@ -274,6 +317,9 @@ apk add pulseaudio-daemon-avahi pulseaudio-tools >/dev/null
 apk add python3 >/dev/null
 # attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
 # (removed before the translations below, whose package for it would hold it)
+# (ImmortalWrt installs the translation too, and it depends on the app: it
+# goes first, and a name that is not installed is not an error either way)
+apk del luci-i18n-attendedsysupgrade-zh-cn >/dev/null 2>&1 || true
 apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
 if grep -q "^P:luci-app-attendedsysupgrade$" /lib/apk/db/installed; then
     echo "luci-app-attendedsysupgrade is still installed" >&2; exit 1
@@ -284,11 +330,20 @@ apk add luci-i18n-base-zh-cn >/dev/null
 for p in $(sed -En "s/^P:luci-(app|proto)-//p" /lib/apk/db/installed); do
     apk add "luci-i18n-$p-zh-cn" >/dev/null 2>&1 && echo "zh-cn: luci-i18n-$p-zh-cn"
 done
-# the Argon theme (its release'"'"'s packages, unsigned)
-apk add --allow-untrusted $EXTRA_LIST >/dev/null
+# the Argon theme: packages of ImmortalWrt itself, or of the OpenWrt release (unsigned)
+[ -z "$THEME_LIST" ] || apk add $THEME_LIST >/dev/null
+[ -z "$EXTRA_LIST" ] || apk add --allow-untrusted $EXTRA_LIST >/dev/null
 echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed)"
-# the info screen'"'"'s packages (cage, cog, Mesa, ...), when there is one
+# The info screen packages (cage, cog, Mesa, ...), when there is one.  A base
+# distribution that builds no video feed (ImmortalWrt) gets the OpenWrt one
+# added to the repositories of the image -- the graphics stack of the screen is
+# in no feed of its own -- and the two GStreamer GL packages libwpewebkit asks
+# for arrive as pinned files.
 if [ -f /in/infoscreen/packages.txt ]; then
+    if [ -n "$VIDEO_FEED" ]; then
+        printf "%s\n" "$VIDEO_FEED" >> /etc/apk/repositories.d/customfeeds.list
+        apk update >/dev/null
+    fi
     # (the transplant above: used when the repository has none of those packages)
     : > /tmp/tp
     if [ -f /in/transplant/names ]; then
@@ -298,7 +353,7 @@ if [ -f /in/infoscreen/packages.txt ]; then
     grep -v "^#" /in/infoscreen/packages.txt > /tmp/pk
     if [ -s /tmp/tp ]; then grep -vxF -f /tmp/tp /tmp/pk > /tmp/pk2 || true; mv /tmp/pk2 /tmp/pk; fi
     [ -s /tmp/pk ] || { echo "no info screen packages to install" >&2; exit 1; }
-    apk add $(cat /tmp/pk) >/dev/null
+    apk add $(cat /tmp/pk) $GL_LIST >/dev/null
     echo "info screen packages: $(wc -l < /tmp/pk)"
     if [ -s /tmp/tp ]; then
         apk add $(cat /in/transplant/deps) >/dev/null
@@ -409,6 +464,8 @@ if [ -n "$STANDALONE" ]; then
     mkdir -p $R/etc/e5 && printf "standalone\n" > $R/etc/e5/image-form
 fi
 mkdir -p $R/etc/e5 && printf "%s\n" "$VERSION" > $R/etc/e5/image-version
+# (the distribution this userspace is: openwrt or immortalwrt, and its release)
+printf "%s %s\n" "$WRT_DISTRO" "$WRT_VER" > $R/etc/e5/distro
 # when the image was built (seconds since 1970, UTC): 高级 -> 系统 shows it
 if [ -n "$E5_BUILD_EPOCH" ]; then printf "%s\n" "$E5_BUILD_EPOCH" > $R/etc/e5/build-time
 else date -u +%s > $R/etc/e5/build-time; fi
@@ -418,8 +475,8 @@ ls -la /out/$NAME
 
 [ -n "$STANDALONE" ] || exit 0
 # the tree as an ext4 image (mke2fs -d: no loop device, no root on the host)
-IMG=e5-openwrt-$VER.ext4
-[ "$DEVICE_FILES" != 0 ] || IMG=e5-openwrt-$VER-generic.ext4
+IMG=$E5_WRT_NAME-$VER.ext4
+[ "$DEVICE_FILES" != 0 ] || IMG=$E5_WRT_NAME-$VER-generic.ext4
 docker run --rm --platform linux/arm64 -v "$WORK":/w -v "$OUT":/out \
     -e NAME="$NAME" -e IMG="$IMG" -e MB="$IMAGE_MB" alpine:3.22 sh -euc '
 apk add -q e2fsprogs >/dev/null
