@@ -122,7 +122,7 @@ mkdir -p "$WORK/extra"
 rm -f "$WORK/extra/"*.apk.part
 if [ -n "$ARGON_APKS" ]; then
     printf "%s\n" "$ARGON_APKS" | while read -r sum f; do
-        [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
+        [ -f "$WORK/extra/$f" ] || { curl -fsSL --retry 5 --retry-all-errors -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
         got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
         [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
     done
@@ -132,7 +132,7 @@ fi
 if [ -n "$GL_APKS" ]; then
     GL_URL=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
     printf "%s\n" "$GL_APKS" | while read -r sum f; do
-        [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$GL_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
+        [ -f "$WORK/extra/$f" ] || { curl -fsSL --retry 5 --retry-all-errors -o "$WORK/extra/$f.part" "$GL_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
         got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
         [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
     done
@@ -152,10 +152,10 @@ ls "$OUT"/modemmanager-1*.apk >/dev/null 2>&1 || {
 [ -x "$BUSYBOX" ] || { echo "no static busybox at $BUSYBOX (E5_BUSYBOX=...)" >&2; exit 1; }
 
 if [ ! -f "$WORK/$TARBALL" ]; then
-    curl -fL -o "$WORK/$TARBALL.part" "$URL/$TARBALL"
+    curl -fL --retry 5 --retry-all-errors -o "$WORK/$TARBALL.part" "$URL/$TARBALL"
     mv "$WORK/$TARBALL.part" "$WORK/$TARBALL"
 fi
-want=$(curl -fsSL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p")
+want=$(curl -fsSL --retry 5 --retry-all-errors "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p")
 have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 [ -n "$want" ] && [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 
