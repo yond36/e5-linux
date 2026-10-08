@@ -91,6 +91,17 @@ jobs:
                   apk search -e "$p" >/dev/null || { echo "the video feed has no $p" >&2; exit 1; }
               done
               echo "== keys"; ls /etc/apk/keys/
+              # (the same retry build-rootfs.sh uses: the CDN drops long
+              # downloads now and then)
+              apk_add() {
+                  n=0
+                  while ! apk add "$@" >/dev/null; do
+                      n=$((n + 1))
+                      [ "$n" -lt 4 ] || { echo "apk add $* failed" >&2; return 1; }
+                      echo "apk add $*: retry $n" >&2
+                      sleep 10
+                  done
+              }
               # (does a package from that feed verify with the keys of this
               # base?  seatd has a single dependency and no virtual ones)
               if apk add seatd >/dev/null 2>/tmp/seatd.err; then
@@ -98,19 +109,13 @@ jobs:
               else
                   echo "== video feed: packages do NOT verify"; cat /tmp/seatd.err
               fi
-              # (the dependencies of the pinned files first, so an unverified
-              # install covers only those files themselves)
-              apk add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
-                  libgst1controller libgraphene libjpeg libpng >/dev/null
-              if apk add /in/extra/libgst1gl-1.26.4-r1.apk /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null 2>/tmp/gl.err; then
-                  echo "== pinned files: verify"
-              else
-                  echo "== pinned files: do NOT verify, installing with --allow-untrusted"
-                  cat /tmp/gl.err
-                  apk add --allow-untrusted /in/extra/libgst1gl-1.26.4-r1.apk \
-                      /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null
-              fi
-              apk add cage cog libmesa-panfrost >/dev/null || { echo "== the screen packages failed" >&2; exit 1; }
+              # (the two pinned files with their dependencies first: their
+              # signature is verified against no other distribution's keys)
+              apk_add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
+                  libgst1controller libgraphene libjpeg libpng
+              apk add --allow-untrusted /in/extra/libgst1gl-1.26.4-r1.apk \
+                  /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null
+              apk_add cage cog libmesa-panfrost
               echo "== installed"
               for p in cage cog libcogcore libwpewebkit libgst1gl gst1-mod-opengl libmesa-panfrost \
                        seatd libseat libwayland libxkbcommon wlroots xkeyboard-config harfbuzz \

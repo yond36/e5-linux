@@ -298,6 +298,17 @@ docker run --rm --platform linux/arm64 \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
     "$E5_WRT_BASE_IMAGE" /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
+# (the CDN drops a long download now and then -- "wget: exited with error 4",
+# "Connection aborted" -- and apk resumes nothing: retry the whole install)
+apk_add() {
+    n=0
+    while ! apk add "$@" >/dev/null; do
+        n=$((n + 1))
+        [ "$n" -lt 4 ] || { echo "apk add $* failed" >&2; return 1; }
+        echo "apk add $*: retry $n" >&2
+        sleep 10
+    done
+}
 apk update >/dev/null
 # ModemManager first, from its local file (unsigned): its release is above the
 # repository one, so what depends on it takes this one and apk upgrade keeps it
@@ -353,7 +364,15 @@ if [ -f /in/infoscreen/packages.txt ]; then
     grep -v "^#" /in/infoscreen/packages.txt > /tmp/pk
     if [ -s /tmp/tp ]; then grep -vxF -f /tmp/tp /tmp/pk > /tmp/pk2 || true; mv /tmp/pk2 /tmp/pk; fi
     [ -s /tmp/pk ] || { echo "no info screen packages to install" >&2; exit 1; }
-    apk add $(cat /tmp/pk) $GL_LIST >/dev/null
+    if [ -n "$GL_LIST" ]; then
+        # (their dependencies first, so the --allow-untrusted below covers the
+        # two pinned files themselves and nothing else: the signature of a
+        # local file is not verified against the keys of another distribution)
+        apk_add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
+            libgst1controller libgraphene libjpeg libpng
+        apk add --allow-untrusted $GL_LIST >/dev/null
+    fi
+    apk_add $(cat /tmp/pk)
     echo "info screen packages: $(wc -l < /tmp/pk)"
     if [ -s /tmp/tp ]; then
         apk add $(cat /in/transplant/deps) >/dev/null
