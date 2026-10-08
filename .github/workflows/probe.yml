@@ -110,7 +110,7 @@ jobs:
                   echo "== video feed: packages do NOT verify"; cat /tmp/seatd.err
               fi
               # (the two pinned files with their dependencies first: their
-              # signature is verified against no other distribution's keys)
+              # signature is not verified against the keys of another one)
               apk_add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
                   libgst1controller libgraphene libjpeg libpng
               apk add --allow-untrusted /in/extra/libgst1gl-1.26.4-r1.apk \
