@@ -42,20 +42,17 @@ jobs:
           [ -n "$checksum" ] || { echo "::error::no checksum for $E5_WRT_TARBALL"; exit 1; }
           printf '%s  %s\n' "$checksum" "work/openwrt/$E5_WRT_TARBALL" | sha256sum --check
           docker import --platform linux/arm64 "work/openwrt/$E5_WRT_TARBALL" "$E5_WRT_BASE_IMAGE"
-      - name: Fetch the pinned GStreamer GL files
+      - name: Fetch the pinned packages
         run: |
           set -euo pipefail
           . openwrt/wrt-distro.sh
+          . openwrt/wrt-apks.sh
+          video=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/video
+          packages=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
           mkdir -p work/extra
-          gl=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
-          printf '%s\n' \
-            '9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk' \
-            '14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk' |
-          while read -r sum f; do
-              curl -fsSL --retry 5 --retry-all-errors --http1.1 "$gl/$f" -o "work/extra/$f"
-              got=$(sha256sum "work/extra/$f" | cut -d" " -f1)
-              [ "$got" = "$sum" ] || { echo "::error::checksum mismatch for $f"; exit 1; }
-          done
+          printf "%s\n" "$E5_GL_APKS" | while read -r sum f; do fetch_apk "$packages/$f" "$sum" "work/extra/$f"; done
+          printf "%s\n" "$E5_BIG_APKS" | while read -r sum f; do fetch_apk "$video/$f" "$sum" "work/extra/$f"; done
+          ls -la work/extra
       - name: Install what the info screen needs
         run: |
           set -euo pipefail
@@ -109,12 +106,8 @@ jobs:
               else
                   echo "== video feed: packages do NOT verify"; cat /tmp/seatd.err
               fi
-              # (the two pinned files with their dependencies first: their
-              # signature is not verified against the keys of another one)
-              apk_add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
-                  libgst1controller libgraphene libjpeg libpng
-              apk add --allow-untrusted /in/extra/libgst1gl-1.26.4-r1.apk \
-                  /in/extra/gst1-mod-opengl-1.26.4-r1.apk >/dev/null
+              # (the pinned files, exactly as build-rootfs.sh installs them)
+              apk_add --allow-untrusted /in/extra/libgst1gl-*.apk /in/extra/gst1-mod-opengl-*.apk                   /in/extra/libwpewebkit-*.apk /in/extra/libmesa-panfrost-*.apk
               apk_add cage cog libmesa-panfrost
               echo "== installed"
               for p in cage cog libcogcore libwpewebkit libgst1gl gst1-mod-opengl libmesa-panfrost \

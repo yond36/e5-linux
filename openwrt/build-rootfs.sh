@@ -94,56 +94,46 @@ KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
 python3 "$TOP/tools/openwrt-package-state.py" check "$VER"
 
-# The Argon theme and the GStreamer GL pieces WPE WebKit asks for are not in
-# every feed: OpenWrt takes the three theme packages and the GL ones from
-# files pinned here; ImmortalWrt builds the theme itself (THEME_LIST) and
-# builds no GL ones at all -- no Mesa, no video feed -- so those two come from
-# OpenWrt's packages feed (E5_WRT_VIDEO_*) for the video feed's libwpewebkit.
+# The pinned packages (openwrt/wrt-apks.sh) and the feeds they come from; the
+# screen's graphics stack is one of these only where the base distribution
+# builds no video feed of its own (ImmortalWrt: wrt-distro.sh).
+. "$HERE/wrt-apks.sh"
+VIDEO_DIR=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/video
+PACKAGES_DIR=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
+VIDEO_FEED=
+if [ "$E5_WRT_DISTRO" = immortalwrt ] && [ -n "$INFOSCREEN" ]; then
+    VIDEO_FEED=$VIDEO_DIR/packages.adb
+fi
+THEME_LIST=
 ARGON_APKS=
 GL_APKS=
-THEME_LIST=
-EXTRA_LIST=
-GL_LIST=
+BIG_APKS=
 if [ "$E5_WRT_DISTRO" = openwrt ]; then
-    # the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
-    ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7
-    ARGON_APKS="c5f0e3a55ef96213884184be9aeaadc8586418986c4dde1ff1866be5e938aaef luci-theme-argon-2.4.7-r1.apk
-506e2bc4bef7d40fab051bb38902f71a8af0356ebe765f01b1808f6d2ce8bf8f luci-app-argon-config-2.4.7-r1.apk
-00163d6b9d7f1fccae84bd220c6f3c9a4f78fe063b1d12408127d36bfe38dd7e luci-i18n-argon-config-zh-cn-26.103.13761.3e099a3.apk"
+    ARGON_URL=$E5_ARGON_URL
+    ARGON_APKS=$E5_ARGON_APKS
 else
     # (ImmortalWrt's luci feed carries the theme itself)
     THEME_LIST="luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn"
-    if [ -n "$INFOSCREEN" ]; then
-        GL_APKS="9c711e73dc5bb2f8aa5498a50381ec5a1edaa85ec02f82e0a42fd92453566129 libgst1gl-1.26.4-r1.apk
-14172d6aac7edfb6a56f11a7ac81c1e4bed6dfcb5909d098256a00c79e44f101 gst1-mod-opengl-1.26.4-r1.apk"
-    fi
+fi
+if [ -n "$INFOSCREEN" ]; then
+    GL_APKS=$E5_GL_APKS
+    [ "$E5_WRT_DISTRO" = immortalwrt ] && BIG_APKS=$E5_BIG_APKS
 fi
 mkdir -p "$WORK/extra"
 rm -f "$WORK/extra/"*.apk.part
 if [ -n "$ARGON_APKS" ]; then
-    printf "%s\n" "$ARGON_APKS" | while read -r sum f; do
-        [ -f "$WORK/extra/$f" ] || { curl -fsSL --retry 5 --retry-all-errors -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
-        got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
-        [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
-    done
-    # (only the pinned ones go in)
-    EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
+    printf "%s\n" "$ARGON_APKS" | while read -r sum f; do fetch_apk "$ARGON_URL/$f" "$sum" "$WORK/extra/$f"; done
 fi
 if [ -n "$GL_APKS" ]; then
-    GL_URL=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/packages
-    printf "%s\n" "$GL_APKS" | while read -r sum f; do
-        [ -f "$WORK/extra/$f" ] || { curl -fsSL --retry 5 --retry-all-errors -o "$WORK/extra/$f.part" "$GL_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
-        got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
-        [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
-    done
-    GL_LIST=$(printf "%s\n" "$GL_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
+    printf "%s\n" "$GL_APKS" | while read -r sum f; do fetch_apk "$PACKAGES_DIR/$f" "$sum" "$WORK/extra/$f"; done
 fi
-# (the feed the screen's graphics stack comes from when the base distribution
-# builds none: ImmortalWrt, see wrt-distro.sh)
-VIDEO_FEED=
-if [ "$E5_WRT_DISTRO" = immortalwrt ] && [ -n "$INFOSCREEN" ]; then
-    VIDEO_FEED=$E5_WRT_VIDEO_DL/$E5_WRT_VIDEO_VER/packages/aarch64_generic/video/packages.adb
+if [ -n "$BIG_APKS" ]; then
+    printf "%s\n" "$BIG_APKS" | while read -r sum f; do fetch_apk "$VIDEO_DIR/$f" "$sum" "$WORK/extra/$f"; done
 fi
+# (only the pinned ones go in: they are installed from files, and their
+# dependencies come from the repositories with them)
+EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk 'NF{print "/in/extra/" $2}' | tr '\n' ' ')
+GL_LIST=$(printf "%s\n" "$GL_APKS" "$BIG_APKS" | awk 'NF{print "/in/extra/" $2}' | tr '\n' ' ')
 
 ls "$OUT"/bluez-daemon-*.apk >/dev/null 2>&1 || {
     echo "no BlueZ package in $OUT -- run openwrt/build-bluez.sh first" >&2; exit 1; }
@@ -304,7 +294,7 @@ apk_add() {
     n=0
     while ! apk add "$@" >/dev/null; do
         n=$((n + 1))
-        [ "$n" -lt 4 ] || { echo "apk add $* failed" >&2; return 1; }
+        [ "$n" -lt 6 ] || { echo "apk add $* failed" >&2; return 1; }
         echo "apk add $*: retry $n" >&2
         sleep 10
     done
@@ -365,12 +355,12 @@ if [ -f /in/infoscreen/packages.txt ]; then
     if [ -s /tmp/tp ]; then grep -vxF -f /tmp/tp /tmp/pk > /tmp/pk2 || true; mv /tmp/pk2 /tmp/pk; fi
     [ -s /tmp/pk ] || { echo "no info screen packages to install" >&2; exit 1; }
     if [ -n "$GL_LIST" ]; then
-        # (their dependencies first, so the --allow-untrusted below covers the
-        # two pinned files themselves and nothing else: the signature of a
-        # local file is not verified against the keys of another distribution)
-        apk_add libmesa-panfrost libwayland libgudev libgst1allocators libgst1video \
-            libgst1controller libgraphene libjpeg libpng
-        apk add --allow-untrusted $GL_LIST >/dev/null
+        # (the pinned files: the two GStreamer GL packages and, on ImmortalWrt,
+        # libwpewebkit and the Mesa panfrost driver.  The signature of a local
+        # file is not verified against the keys of another distribution, so
+        # they go in unverified -- they are pinned by checksum above -- and
+        # their dependencies come from the repositories in the same call.)
+        apk_add --allow-untrusted $GL_LIST
     fi
     apk_add $(cat /tmp/pk)
     echo "info screen packages: $(wc -l < /tmp/pk)"
