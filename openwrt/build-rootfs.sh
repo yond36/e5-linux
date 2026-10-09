@@ -450,6 +450,13 @@ rm -f $R/etc/rc.d/*pulseaudio
 # (the cage package'"'"'s own kiosk service: cog on http://localhost/, which is LuCI,
 # shown at every boot before the info screen'"'"'s session takes the panel)
 rm -f $R/etc/rc.d/*cage
+# (ImmortalWrt'"'"'s base ships block-mount/automount; OpenWrt'"'"'s does not.  Its
+# 15-automount runs `block info` on every block uevent, and block info opens
+# /dev/sdiag_nr (a Unisoc SIPC diagnostic channel) and blocks there forever
+# in an uninterruptible read -- taking procd'"'"'s single hotplug exec slot with
+# it, so no later hotplug script or firmware load runs again.  The E5 mounts
+# what it needs itself; drop the automount hook.)
+rm -f $R/etc/hotplug.d/block/15-automount
 for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-voice-audio e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s

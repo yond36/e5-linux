@@ -41,7 +41,20 @@ start_service() {
 		fi
 		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko card=$C ||
 			{ [ $C = 0 ] && insmod $M/sipc_wwan.ko; } || exit 1
-		echo "sipc_wwan loaded, SIM card $C"'
+		echo "sipc_wwan loaded, SIM card $C"
+		# 25.12'"'"'s /etc/hotplug.json does not dispatch wwan uevents (the rule
+		# that would is nested inside the usb-serial one), and ModemManager is
+		# built without udev, so it learns of a port only through a kernel-
+		# event report -- which never arrives.  Report the ports the module
+		# just created, the way the wwan hotplug script would: the events the
+		# script writes are cached, so ModemManager hears them whether it is
+		# up yet or starts later.
+		for d in /sys/class/wwan/wwan*at*; do
+			[ -d "$d" ] || continue
+			n=$(basename "$d")
+			p=$(readlink -f "$d"); p=${p#/sys}
+			ACTION=add SUBSYSTEM=wwan DEVNAME="$n" DEVPATH="$p" /sbin/hotplug-call wwan
+		done'
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
