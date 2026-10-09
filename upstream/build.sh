@@ -34,13 +34,17 @@ echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 # series and does not apply here.  The tree is a pristine CI clone, so each
 # patch is either not applied or already applied; anything else stops the build.
 #
-# The patches are COMMITTED in this throwaway clone, so the tree counts as
-# clean: an uncommitted change makes setlocalversion append -dirty, and the
-# release string then reads 6.18.54-e5-g020b970e351e-dirty while the rootfs
-# ships its modules under the clean name (openwrt/build-rootfs.sh) -- the
-# modem and audio modules would not be found and the CP chain would never
-# start (this is exactly the trap kernel/e5-linux.fragment warns about).
+# The patched files are then marked assume-unchanged, WITHOUT committing: a
+# tree git considers dirty makes setlocalversion append -dirty, and the release
+# string 6.18.54-e5-g020b970e351e-dirty no longer matches the modules path the
+# rootfs ships (/lib/modules/6.18.54-e5-g020b970e351e -- openwrt/build-rootfs.sh
+# stages them under kernel.release), so no module would load: the CP chain
+# never starts and ModemManager finds no modem.  (kernel/e5-linux.fragment warns
+# about exactly this.)  Committing instead is not an option: the release check
+# compares the kernel checkout's revision before and after the build and stops
+# when it moved.
 if [ -d /work/e5-mainline-patches ]; then
+    patched=
     for p in $(ls /work/e5-mainline-patches/*.patch 2>/dev/null | sort); do
         if git apply --reverse --check "$p" 2>/dev/null; then
             echo "== $(basename "$p"): already applied"
@@ -48,12 +52,17 @@ if [ -d /work/e5-mainline-patches ]; then
             echo "== applying $(basename "$p")"
             git apply "$p" || { echo "cannot apply $p" >&2; exit 1; }
         fi
+        # only the files the tree already tracks (Kconfig, Makefile) count as
+        # changes; the driver sources the patch adds are untracked, and the
+        # dirty test -- setlocalversion's too -- runs with --untracked-files=no
+        for f in $(git apply --numstat "$p" 2>/dev/null | cut -f3); do
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 && patched="$patched $f"
+        done
     done
-    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-        git -c user.email=ci@e5 -c user.name=e5-ci commit -qam "e5: the mainline patch series" \
-            || { echo "cannot commit the patch series" >&2; exit 1; }
-        echo "== patch series committed (release string stays clean)"
-    fi
+    # shellcheck disable=SC2086
+    [ -z "$patched" ] || git update-index --assume-unchanged $patched
+    [ -z "$(git status --porcelain --untracked-files=no)" ] ||
+        echo "   (note: the tree still looks changed; the release gets -dirty)"
 fi
 
 CFG=/work/e5-mainline.config DEST=/work/out
