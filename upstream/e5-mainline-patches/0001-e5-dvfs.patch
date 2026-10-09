@@ -125,10 +125,10 @@ index 000000000..fadd774e9
 +MODULE_DESCRIPTION("E5: read-only probe of the firmware CPU DVFS service");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..9f4c1e088
+index 000000000..5e0561066
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,298 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10) CPU DVFS through the device firmware.
@@ -309,11 +309,6 @@ index 000000000..9f4c1e088
 +	policy->driver_data = NULL;
 +}
 +
-+static struct freq_attr *e5_cpufreq_attr[] = {
-+	&cpufreq_freq_attr_scaling_available_freqs,
-+	NULL,
-+};
-+
 +static struct cpufreq_driver e5_cpufreq_driver = {
 +	.name			= "e5-dvfs",
 +	/*
@@ -327,7 +322,6 @@ index 000000000..9f4c1e088
 +	.exit			= e5_exit,
 +	.get			= e5_get,
 +	.target_index		= e5_set_target,
-+	.attr			= e5_cpufreq_attr,
 +	.suspend		= cpufreq_generic_suspend,
 +};
 +
