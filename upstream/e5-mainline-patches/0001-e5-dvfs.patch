@@ -48,40 +48,40 @@ index 681d687b5..d0a0a0faf 100644
  CFLAGS_amd-pstate-trace.o               := -I$(src)
 diff --git a/drivers/cpufreq/e5-dvfs-probe.c b/drivers/cpufreq/e5-dvfs-probe.c
 new file mode 100644
-index 000000000..8ed2dd8eb
+index 000000000..0fb3d9d73
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs-probe.c
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,196 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10): probe the firmware's CPU DVFS service.
 + *
-+ * Stage 1b, read-only on the CPU side and idempotent on the firmware side:
-+ * the first probe showed that DVFS_REV answers (a0=0, a1=1) but PAIR_GET and
-+ * FREQ_GET are refused with 0xffffffff until the firmware's own DVFS logic has
-+ * been initialised.  The vendor driver's probe does, in this order:
++ * Stage 2.  Stage 1b showed DVFS_INIT succeeding (ret 0) but PAIR_GET,
++ * FREQ_GET and TABLE_UPDATE still refused with 0xffffffff.  The vendor
++ * driver's probe does more before any table is read, per cluster:
 + *
-+ *     dvfs_init(flag)          flag = the sprdboot.dvfs_set=0x.. token of the
-+ *                              kernel command line (0 on this board)
-+ *     step_set / margin_set / pmic_set / bin_set / version_set
-+ *     dvfs_enable(cluster)  -- per cluster, at policy init
-+ *     table_update(cluster, temp)
++ *   - step_set    (sprd,voltage-step)   -- absent on this board
++ *   - margin_set  (sprd,voltage-margin) = 20
++ *   - pmic_set    (sprd,pmic-type)      -- absent; the board's PMIC type is
++ *                                          pmic@2's "pmic-type-num" = 2
++ *   - bin_set     (nvmem cpu_bin_*)     -- the chip's silicon binning
++ *   - version_set (hwfeature/auto efuse)
++ *   - table_update(cluster, temp)       -- reports the entry count
++ *   - enable      (at policy init, per cluster)
 + *
-+ * This probe runs INIT then, for each cluster, TABLE_UPDATE at the current
-+ * temperature (which is the call that reports the entry count) and re-reads
-+ * PAIR_GET/FREQ_GET, so we learn what the firmware reports after init without
-+ * registering any cpufreq driver.
-+ *
-+ * Nothing here changes the CPU frequency: INIT only turns the firmware's DVFS
-+ * logic on, which the bootloader asked for anyway (sprdboot.dvfs_set=0x0 is
-+ * what the vendor kernel reads as flag 0), and no FREQ_SET is ever issued.
++ * This stage performs that handshake and reports what the tables say, still
++ * without any FREQ_SET.  The binning is read through the mainline nvmem
++ * consumer API (the cells the bootloader's device tree declares), so the same
++ * code can serve the real cpufreq client.
 + */
 +
 +#include <linux/arm-smccc.h>
 +#include <linux/init.h>
 +#include <linux/kernel.h>
 +#include <linux/module.h>
++#include <linux/nvmem-consumer.h>
 +#include <linux/of.h>
++#include <linux/slab.h>
 +#include <linux/sprintf.h>
 +
 +#define E5_SIP_DVFS_REV		ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0600)
@@ -97,24 +97,59 @@ index 000000000..8ed2dd8eb
 +#define E5_SIP_DVFS_VERSION_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060a)
 +#define E5_SIP_DVFS_INIT	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060b)
 +
-+/* the flag the vendor driver reads out of the kernel command line */
++static void smc1(unsigned long fn, u32 a1, u32 a2, struct arm_smccc_res *res)
++{
++	arm_smccc_smc(fn, a1, a2, 0, 0, 0, 0, 0, res);
++}
++
 +static u32 e5_cmdline_flag(void)
 +{
-+	struct device_node *chosen;
++	struct device_node *chosen = of_find_node_by_path("/chosen");
 +	const char *cmdline, *hit;
 +	u32 value = 0;
 +
-+	chosen = of_find_node_by_path("/chosen");
 +	if (!chosen)
 +		return 0;
-+	if (of_property_read_string(chosen, "bootargs", &cmdline)) {
-+		of_node_put(chosen);
-+		return 0;
++	if (!of_property_read_string(chosen, "bootargs", &cmdline)) {
++		hit = strstr(cmdline, "sprdboot.dvfs_set=0x");
++		if (hit)
++			sscanf(hit, "sprdboot.dvfs_set=0x%x", &value);
 +	}
-+	hit = strstr(cmdline, "sprdboot.dvfs_set=0x");
-+	if (hit)
-+		sscanf(hit, "sprdboot.dvfs_set=0x%x", &value);
 +	of_node_put(chosen);
++	return value;
++}
++
++/* the vendor device tree writes its u32 properties big-endian */
++static int e5_read_u32_be(struct device_node *np, const char *name, u32 *out)
++{
++	const __be32 *p = of_get_property(np, name, NULL);
++
++	if (!p)
++		return -EINVAL;
++	*out = be32_to_cpup(p);
++	return 0;
++}
++
++static u32 e5_read_bin(struct device_node *cluster_np)
++{
++	struct nvmem_cell *cell;
++	void *buf;
++	size_t len;
++	u32 value = 0xffffffff;
++
++	cell = of_nvmem_cell_get(cluster_np, NULL);
++	if (IS_ERR(cell)) {
++		pr_info("e5-dvfs-probe: nvmem cell lookup: %ld\n", PTR_ERR(cell));
++		return 0xffffffff;
++	}
++	buf = nvmem_cell_read(cell, &len);
++	nvmem_cell_put(cell);
++	if (IS_ERR(buf)) {
++		pr_info("e5-dvfs-probe: nvmem read: %ld\n", PTR_ERR(buf));
++		return 0xffffffff;
++	}
++	memcpy(&value, buf, min_t(size_t, len, sizeof(value)));
++	kfree(buf);
 +	return value;
 +}
 +
@@ -124,13 +159,13 @@ index 000000000..8ed2dd8eb
 +	int i;
 +
 +	for (i = 0; i < 14; i++) {
-+		arm_smccc_smc(E5_SIP_DVFS_PAIR_GET, cluster, i, 0, 0, 0, 0, 0, &res);
++		smc1(E5_SIP_DVFS_PAIR_GET, cluster, i, &res);
 +		pr_info("e5-dvfs-probe: %s clus%u pair[%d]: ret=0x%lx freq=%lu volt=%lu\n",
 +			when, cluster, i, res.a0, res.a1, res.a2);
 +		if (res.a0 || !res.a1)
 +			break;
 +	}
-+	arm_smccc_smc(E5_SIP_DVFS_FREQ_GET, cluster, 0, 0, 0, 0, 0, 0, &res);
++	smc1(E5_SIP_DVFS_FREQ_GET, cluster, 0, &res);
 +	pr_info("e5-dvfs-probe: %s clus%u freq_get: ret=0x%lx freq=%lu\n",
 +		when, cluster, res.a0, res.a1);
 +}
@@ -138,42 +173,81 @@ index 000000000..8ed2dd8eb
 +static int __init e5_dvfs_probe_init(void)
 +{
 +	struct arm_smccc_res res;
-+	u32 flag, i;
++	struct device_node *dvfs, *clus, *hwf;
++	u32 flag, i = 0;
 +
-+	arm_smccc_smc(E5_SIP_DVFS_REV, 0, 0, 0, 0, 0, 0, 0, &res);
++	smc1(E5_SIP_DVFS_REV, 0, 0, &res);
 +	pr_info("e5-dvfs-probe: DVFS_REV -> v%lu.%lu\n", res.a0, res.a1);
 +
-+	for (i = 0; i < 3; i++)
-+		e5_dump_cluster(i, "before-init");
-+
 +	flag = e5_cmdline_flag();
-+	pr_info("e5-dvfs-probe: dvfs_set flag = 0x%x\n", flag);
++	smc1(E5_SIP_DVFS_INIT, flag, 0, &res);
++	pr_info("e5-dvfs-probe: DVFS_INIT(0x%x) -> 0x%lx\n", flag, res.a0);
 +
-+	arm_smccc_smc(E5_SIP_DVFS_INIT, flag, 0, 0, 0, 0, 0, 0, &res);
-+	pr_info("e5-dvfs-probe: DVFS_INIT(0x%x) -> ret=0x%lx a1=0x%lx\n", flag, res.a0, res.a1);
++	hwf = of_find_node_by_path("/hwfeature/auto");
 +
-+	/*
-+	 * TABLE_UPDATE is what reports the entry count, and the vendor driver
-+	 * calls it before dvfs_enable() (its policy init: table_update, then
-+	 * enable).  No ENABLE here: this probe leaves the clusters exactly as
-+	 * the firmware had them and only reads tables.
-+	 */
-+	for (i = 0; i < 3; i++) {
-+		/* temperature in the vendor's unit: 25 C = 25000 */
-+		arm_smccc_smc(E5_SIP_DVFS_TABLE_UPD, i, 25000, 0, 0, 0, 0, 0, &res);
-+		pr_info("e5-dvfs-probe: clus%u TABLE_UPDATE(25000) -> ret=0x%lx entries=%lu\n",
-+			i, res.a0, res.a1);
++	dvfs = of_find_node_by_name(NULL, "apcpu-dvfs");
++	if (!dvfs) {
++		pr_info("e5-dvfs-probe: no apcpu-dvfs node\n");
++		return 0;
 +	}
 +
-+	for (i = 0; i < 3; i++)
-+		e5_dump_cluster(i, "after-init");
++	for_each_child_of_node(dvfs, clus) {
++		u32 margin, step, pmic = 2, bin, version = 0;
++		const char *cellname;
++
++		if (!of_node_name_prefix(clus, "cpufreq-clus"))
++			continue;
++
++		pr_info("e5-dvfs-probe: --- cluster %u ---\n", i);
++
++		if (!e5_read_u32_be(clus, "sprd,voltage-step", &step)) {
++			smc1(E5_SIP_DVFS_STEP_SET, i, step, &res);
++			pr_info("e5-dvfs-probe: clus%u STEP_SET(%u) -> 0x%lx\n", i, step, res.a0);
++		}
++		if (!e5_read_u32_be(clus, "sprd,voltage-margin", &margin)) {
++			smc1(E5_SIP_DVFS_MARGIN_SET, i, margin, &res);
++			pr_info("e5-dvfs-probe: clus%u MARGIN_SET(%u) -> 0x%lx\n", i, margin, res.a0);
++		}
++		/* the board PMIC type: pmic@2's pmic-type-num, which is what the
++		 * vendor driver's "sprd,pmic-type" resolves to here */
++		smc1(E5_SIP_DVFS_PMIC_SET, i, pmic, &res);
++		pr_info("e5-dvfs-probe: clus%u PMIC_SET(%u) -> 0x%lx\n", i, pmic, res.a0);
++
++		if (!of_property_read_string(clus, "nvmem-cell-names", &cellname)) {
++			bin = e5_read_bin(clus);
++			pr_info("e5-dvfs-probe: clus%u bin(%s) = %u (0x%x)\n", i, cellname, bin, bin);
++			if (bin != 0xffffffff) {
++				smc1(E5_SIP_DVFS_BIN_SET, i, bin, &res);
++				pr_info("e5-dvfs-probe: clus%u BIN_SET(%u) -> 0x%lx\n", i, bin, res.a0);
++			}
++		}
++
++		if (hwf && of_property_present(clus, "sprd,multi-version")) {
++			const void *ef = of_get_property(hwf, "efuse", NULL);
++
++			if (ef)
++				memcpy(&version, ef, sizeof(version));
++			pr_info("e5-dvfs-probe: clus%u version efuse = 0x%x\n", i, version);
++			smc1(E5_SIP_DVFS_VERSION_SET, i, version, &res);
++			pr_info("e5-dvfs-probe: clus%u VERSION_SET -> 0x%lx\n", i, res.a0);
++		}
++
++		smc1(E5_SIP_DVFS_TABLE_UPD, i, 25000, &res);
++		pr_info("e5-dvfs-probe: clus%u TABLE_UPDATE(25C) -> 0x%lx entries=%lu\n", i, res.a0, res.a1);
++
++		e5_dump_cluster(i, "ready");
++		i++;
++	}
++	of_node_put(dvfs);
++	if (hwf)
++		of_node_put(hwf);
 +
 +	return 0;
 +}
 +
 +late_initcall(e5_dvfs_probe_init);
 +MODULE_LICENSE("GPL");
-+MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (init handshake)");
++MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (full handshake)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
 index 000000000..5e0561066
