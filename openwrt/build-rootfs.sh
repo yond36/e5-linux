@@ -457,6 +457,10 @@ rm -f $R/etc/rc.d/*cage
 # it, so no later hotplug script or firmware load runs again.  The E5 mounts
 # what it needs itself; drop the automount hook.)
 rm -f $R/etc/hotplug.d/block/15-automount
+# (autocore'"'"'s /sbin/cpuinfo reads `model name` from /proc/cpuinfo for the
+# architecture label; ARMv8 /proc/cpuinfo has no such field, so LuCI'"'"'s
+# Architecture line shows "?".  Fall back to the CPU revision line instead.)
+sed -i 's/\[ -n "${cpu_arch}" \] || cpu_arch="?"/[ -n "${cpu_arch}" ] || cpu_arch="ARMv8 Processor rev $(awk -F '"'"': '"'"' '"'"'\/CPU revision\/ {print $2}'"'"' "$CPUINFO_PATH" | head -1)"/' $R/sbin/cpuinfo
 for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-voice-audio e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
