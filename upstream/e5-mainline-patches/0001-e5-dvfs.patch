@@ -48,10 +48,10 @@ index 681d687b5..d0a0a0faf 100644
  CFLAGS_amd-pstate-trace.o               := -I$(src)
 diff --git a/drivers/cpufreq/e5-dvfs-probe.c b/drivers/cpufreq/e5-dvfs-probe.c
 new file mode 100644
-index 000000000..02ec5142d
+index 000000000..f74714162
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs-probe.c
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,214 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10): probe the firmware's CPU DVFS service.
@@ -97,6 +97,7 @@ index 000000000..02ec5142d
 +#define E5_SIP_DVFS_BIN_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0609)
 +#define E5_SIP_DVFS_VERSION_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060a)
 +#define E5_SIP_DVFS_INIT	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060b)
++#define E5_SIP_DVFS_DEBUG_INIT	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060c)
 +
 +static void smc1(unsigned long fn, u32 a1, u32 a2, struct arm_smccc_res *res)
 +{
@@ -184,6 +185,12 @@ index 000000000..02ec5142d
 +			pr_info("e5-dvfs-probe: clus%u BIN_SET(%u) -> 0x%lx\n", id, bin, res.a0);
 +		}
 +	}
++	/* the vendor calls this at the end of cluster 0's props init */
++	if (id == 0) {
++		smc1(E5_SIP_DVFS_DEBUG_INIT, 0, 0, &res);
++		pr_info("e5-dvfs-probe: DVFS_DEBUG_INIT -> 0x%lx\n", res.a0);
++	}
++
 +	if (of_property_present(clus, "sprd,multi-version")) {
 +		struct device_node *hwf = of_find_node_by_path("/hwfeature/auto");
 +		const void *ef = hwf ? of_get_property(hwf, "efuse", NULL) : NULL;
@@ -242,8 +249,10 @@ index 000000000..02ec5142d
 +	smc1(E5_SIP_DVFS_INIT, flag, 0, &res);
 +	pr_info("e5-dvfs-probe: DVFS_INIT(0x%x) -> 0x%lx\n", flag, res.a0);
 +
-+	/* 3. table_update reports the entry count; then read what it says */
++	/* 3. the vendor's policy init does enable() then table_update() */
 +	for (id = 0; id < 3; id++) {
++		smc1(E5_SIP_DVFS_ENABLE, id, 0, &res);
++		pr_info("e5-dvfs-probe: clus%u ENABLE -> 0x%lx\n", id, res.a0);
 +		smc1(E5_SIP_DVFS_TABLE_UPD, id, 25000, &res);
 +		pr_info("e5-dvfs-probe: clus%u TABLE_UPDATE(25C) -> 0x%lx entries=%lu\n",
 +			id, res.a0, res.a1);
