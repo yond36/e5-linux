@@ -33,8 +33,13 @@ echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 # this script (e5-mainline-patches/).  kernel/patches/ is the 5.15 vendor
 # series and does not apply here.  The tree is a pristine CI clone, so each
 # patch is either not applied or already applied; anything else stops the build.
-# (The resulting -dirty release suffix is harmless: the boot image, the root
-# modules and the rootfs of one build all read the same kernel.release.)
+#
+# The patches are COMMITTED in this throwaway clone, so the tree counts as
+# clean: an uncommitted change makes setlocalversion append -dirty, and the
+# release string then reads 6.18.54-e5-g020b970e351e-dirty while the rootfs
+# ships its modules under the clean name (openwrt/build-rootfs.sh) -- the
+# modem and audio modules would not be found and the CP chain would never
+# start (this is exactly the trap kernel/e5-linux.fragment warns about).
 if [ -d /work/e5-mainline-patches ]; then
     for p in $(ls /work/e5-mainline-patches/*.patch 2>/dev/null | sort); do
         if git apply --reverse --check "$p" 2>/dev/null; then
@@ -44,8 +49,12 @@ if [ -d /work/e5-mainline-patches ]; then
             git apply "$p" || { echo "cannot apply $p" >&2; exit 1; }
         fi
     done
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        git -c user.email=ci@e5 -c user.name=e5-ci commit -qam "e5: the mainline patch series" \
+            || { echo "cannot commit the patch series" >&2; exit 1; }
+        echo "== patch series committed (release string stays clean)"
+    fi
 fi
-[ -z "$(git status --porcelain --untracked-files=no)" ] || echo "   (the tree has uncommitted changes: the release gets -dirty)"
 
 CFG=/work/e5-mainline.config DEST=/work/out
 if [ -n "${E5_RELEASE:-}" ]; then
