@@ -125,7 +125,7 @@ index 000000000..fadd774e9
 +MODULE_DESCRIPTION("E5: read-only probe of the firmware CPU DVFS service");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..73eb91845
+index 000000000..9f4c1e088
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
 @@ -0,0 +1,304 @@
@@ -326,7 +326,7 @@ index 000000000..73eb91845
 +	.init			= e5_init,
 +	.exit			= e5_exit,
 +	.get			= e5_get,
-+	.set_target_index	= e5_set_target,
++	.target_index		= e5_set_target,
 +	.attr			= e5_cpufreq_attr,
 +	.suspend		= cpufreq_generic_suspend,
 +};
