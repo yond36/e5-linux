@@ -283,10 +283,10 @@ index 000000000..b599b28e6
 +MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (vendor order)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..ff327f27f
+index 000000000..4bdd4c98b
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
-@@ -0,0 +1,396 @@
+@@ -0,0 +1,405 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10) CPU DVFS through the device firmware.
@@ -624,12 +624,21 @@ index 000000000..ff327f27f
 +	struct device_node *dvfs, *clus;
 +	u32 id = 0;
 +
++	/*
++	 * DVFS_REV returns the revision IN a0/a1 ("0.1" on this firmware), not a
++	 * status: a0 == 0 is a valid major version, not a refusal.  The refusal
++	 * this protocol uses is 0xffffffff (SPRD_SIP_RET_UNK), the value every
++	 * other call returns when the firmware will not serve it.  (The probe
++	 * printed a0=0 a1=1 as "v0.1" from the start; the first version of this
++	 * check read a0 as a status and refused to register.)
++	 */
 +	smc1(E5_SIP_DVFS_REV, 0, 0, &res);
-+	if (res.a0 == 0 || res.a0 == 0xffffffff) {
++	if (res.a0 == 0xffffffff) {
 +		pr_info("e5-dvfs: firmware has no DVFS service (rev %lu.%lu)\n",
 +			res.a0, res.a1);
 +		return;
 +	}
++	pr_info("e5-dvfs: firmware DVFS service v%lu.%lu\n", res.a0, res.a1);
 +
 +	dvfs = of_find_node_by_name(NULL, "apcpu-dvfs");
 +	if (!dvfs)
