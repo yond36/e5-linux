@@ -29,6 +29,22 @@ KV=$(make -s kernelversion)
 O=/out/$KV
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
+# The E5 changes that are not in Enceka's tree yet ride in as patches, next to
+# this script (e5-mainline-patches/).  kernel/patches/ is the 5.15 vendor
+# series and does not apply here.  The tree is a pristine CI clone, so each
+# patch is either not applied or already applied; anything else stops the build.
+# (The resulting -dirty release suffix is harmless: the boot image, the root
+# modules and the rootfs of one build all read the same kernel.release.)
+if [ -d /work/e5-mainline-patches ]; then
+    for p in $(ls /work/e5-mainline-patches/*.patch 2>/dev/null | sort); do
+        if git apply --reverse --check "$p" 2>/dev/null; then
+            echo "== $(basename "$p"): already applied"
+        else
+            echo "== applying $(basename "$p")"
+            git apply "$p" || { echo "cannot apply $p" >&2; exit 1; }
+        fi
+    done
+fi
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "   (the tree has uncommitted changes: the release gets -dirty)"
 
 CFG=/work/e5-mainline.config DEST=/work/out
