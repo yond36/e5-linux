@@ -48,81 +48,132 @@ index 681d687b5..d0a0a0faf 100644
  CFLAGS_amd-pstate-trace.o               := -I$(src)
 diff --git a/drivers/cpufreq/e5-dvfs-probe.c b/drivers/cpufreq/e5-dvfs-probe.c
 new file mode 100644
-index 000000000..fadd774e9
+index 000000000..8ed2dd8eb
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs-probe.c
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,122 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10): probe the firmware's CPU DVFS service.
 + *
-+ * Stage 1, read-only.  The vendor kernel's sprd-cpufreq-v2 driver is a client
-+ * of a trustos (EL3) service reached through Unisoc's SIP SVC protocol
-+ * (SMC function numbers 0x0600-0x060b).  Whether that service is reachable
-+ * from a mainline kernel, and what it reports before the vendor's full
-+ * initialisation sequence has run, is unknown -- so this probe only asks
-+ * questions and prints the answers:
++ * Stage 1b, read-only on the CPU side and idempotent on the firmware side:
++ * the first probe showed that DVFS_REV answers (a0=0, a1=1) but PAIR_GET and
++ * FREQ_GET are refused with 0xffffffff until the firmware's own DVFS logic has
++ * been initialised.  The vendor driver's probe does, in this order:
 + *
-+ *   - DVFS_REV        : does the service answer at all?
-+ *   - DVFS_PAIR_GET   : what (freq, volt) pairs does it report per index?
-+ *   - DVFS_FREQ_GET   : what does it consider the current frequency?
++ *     dvfs_init(flag)          flag = the sprdboot.dvfs_set=0x.. token of the
++ *                              kernel command line (0 on this board)
++ *     step_set / margin_set / pmic_set / bin_set / version_set
++ *     dvfs_enable(cluster)  -- per cluster, at policy init
++ *     table_update(cluster, temp)
 + *
-+ * Nothing is written, no cpufreq driver is registered, and every failure is
-+ * logged and ignored: the system behaves exactly as before.  When the answers
-+ * are sane, a cpufreq client can be built on top (see the e5-dvfs plan in the
-+ * e5-linux repository).
++ * This probe runs INIT then, for each cluster, TABLE_UPDATE at the current
++ * temperature (which is the call that reports the entry count) and re-reads
++ * PAIR_GET/FREQ_GET, so we learn what the firmware reports after init without
++ * registering any cpufreq driver.
++ *
++ * Nothing here changes the CPU frequency: INIT only turns the firmware's DVFS
++ * logic on, which the bootloader asked for anyway (sprdboot.dvfs_set=0x0 is
++ * what the vendor kernel reads as flag 0), and no FREQ_SET is ever issued.
 + */
 +
 +#include <linux/arm-smccc.h>
 +#include <linux/init.h>
 +#include <linux/kernel.h>
 +#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/sprintf.h>
 +
 +#define E5_SIP_DVFS_REV		ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0600)
++#define E5_SIP_DVFS_ENABLE	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0601)
++#define E5_SIP_DVFS_TABLE_UPD	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0602)
++#define E5_SIP_DVFS_STEP_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0603)
++#define E5_SIP_DVFS_MARGIN_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0604)
++#define E5_SIP_DVFS_FREQ_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0605)
 +#define E5_SIP_DVFS_FREQ_GET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0606)
 +#define E5_SIP_DVFS_PAIR_GET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0607)
++#define E5_SIP_DVFS_PMIC_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0608)
++#define E5_SIP_DVFS_BIN_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x0609)
++#define E5_SIP_DVFS_VERSION_SET	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060a)
++#define E5_SIP_DVFS_INIT	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_SIP, 0x060b)
 +
-+static void e5_probe_cluster(u32 cluster)
++/* the flag the vendor driver reads out of the kernel command line */
++static u32 e5_cmdline_flag(void)
 +{
++	struct device_node *chosen;
++	const char *cmdline, *hit;
++	u32 value = 0;
++
++	chosen = of_find_node_by_path("/chosen");
++	if (!chosen)
++		return 0;
++	if (of_property_read_string(chosen, "bootargs", &cmdline)) {
++		of_node_put(chosen);
++		return 0;
++	}
++	hit = strstr(cmdline, "sprdboot.dvfs_set=0x");
++	if (hit)
++		sscanf(hit, "sprdboot.dvfs_set=0x%x", &value);
++	of_node_put(chosen);
++	return value;
++}
++
++static void e5_dump_cluster(u32 cluster, const char *when)
++{
++	struct arm_smccc_res res;
 +	int i;
 +
-+	for (i = 0; i < 12; i++) {
-+		struct arm_smccc_res res;
-+
++	for (i = 0; i < 14; i++) {
 +		arm_smccc_smc(E5_SIP_DVFS_PAIR_GET, cluster, i, 0, 0, 0, 0, 0, &res);
-+		pr_info("e5-dvfs-probe: clus%u pair[%d]: ret=0x%lx freq=%lu volt=%lu\n",
-+			cluster, i, res.a0, res.a1, res.a2);
++		pr_info("e5-dvfs-probe: %s clus%u pair[%d]: ret=0x%lx freq=%lu volt=%lu\n",
++			when, cluster, i, res.a0, res.a1, res.a2);
 +		if (res.a0 || !res.a1)
 +			break;
 +	}
-+
-+	{
-+		struct arm_smccc_res res;
-+
-+		arm_smccc_smc(E5_SIP_DVFS_FREQ_GET, cluster, 0, 0, 0, 0, 0, 0, &res);
-+		pr_info("e5-dvfs-probe: clus%u freq_get: ret=0x%lx freq=%lu\n",
-+			cluster, res.a0, res.a1);
-+	}
++	arm_smccc_smc(E5_SIP_DVFS_FREQ_GET, cluster, 0, 0, 0, 0, 0, 0, &res);
++	pr_info("e5-dvfs-probe: %s clus%u freq_get: ret=0x%lx freq=%lu\n",
++		when, cluster, res.a0, res.a1);
 +}
 +
 +static int __init e5_dvfs_probe_init(void)
 +{
 +	struct arm_smccc_res res;
-+	u32 cluster;
++	u32 flag, i;
 +
 +	arm_smccc_smc(E5_SIP_DVFS_REV, 0, 0, 0, 0, 0, 0, 0, &res);
-+	pr_info("e5-dvfs-probe: DVFS_REV -> a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx\n",
-+		res.a0, res.a1, res.a2, res.a3);
++	pr_info("e5-dvfs-probe: DVFS_REV -> v%lu.%lu\n", res.a0, res.a1);
 +
-+	for (cluster = 0; cluster < 3; cluster++)
-+		e5_probe_cluster(cluster);
++	for (i = 0; i < 3; i++)
++		e5_dump_cluster(i, "before-init");
++
++	flag = e5_cmdline_flag();
++	pr_info("e5-dvfs-probe: dvfs_set flag = 0x%x\n", flag);
++
++	arm_smccc_smc(E5_SIP_DVFS_INIT, flag, 0, 0, 0, 0, 0, 0, &res);
++	pr_info("e5-dvfs-probe: DVFS_INIT(0x%x) -> ret=0x%lx a1=0x%lx\n", flag, res.a0, res.a1);
++
++	/*
++	 * TABLE_UPDATE is what reports the entry count, and the vendor driver
++	 * calls it before dvfs_enable() (its policy init: table_update, then
++	 * enable).  No ENABLE here: this probe leaves the clusters exactly as
++	 * the firmware had them and only reads tables.
++	 */
++	for (i = 0; i < 3; i++) {
++		/* temperature in the vendor's unit: 25 C = 25000 */
++		arm_smccc_smc(E5_SIP_DVFS_TABLE_UPD, i, 25000, 0, 0, 0, 0, 0, &res);
++		pr_info("e5-dvfs-probe: clus%u TABLE_UPDATE(25000) -> ret=0x%lx entries=%lu\n",
++			i, res.a0, res.a1);
++	}
++
++	for (i = 0; i < 3; i++)
++		e5_dump_cluster(i, "after-init");
 +
 +	return 0;
 +}
 +
 +late_initcall(e5_dvfs_probe_init);
 +MODULE_LICENSE("GPL");
-+MODULE_DESCRIPTION("E5: read-only probe of the firmware CPU DVFS service");
++MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (init handshake)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
 index 000000000..5e0561066
