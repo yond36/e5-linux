@@ -3,6 +3,10 @@
 #   modem/  sipc_wwan once the CP's AT channel exists (/etc/init.d/e5-sipc-wwan)
 #   audio/  the audio stack, once the DSP can run (/opt/e5/e5-audio-dsp, from /etc/init.d/e5-audio)
 modem/sipc_wwan.ko
+#   cpufreq/  the firmware DVFS client: it is a module on purpose, so a
+#   FREQ_SET never runs during boot; load it by hand to test, then let a
+#   service load it once the tables' bring-up is trusted
+cpufreq/e5-dvfs.ko
 audio/agdsp_pd.ko
 audio/audio_mem.ko
 audio/audio_sipc.ko
