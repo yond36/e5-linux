@@ -1,0 +1,7 @@
+config inbox 'main'
+	# How many of the most recent messages stay in the SIM card's own SMS
+	# storage (50 slots per card) after they are in the inbox.  0 frees the
+	# storage right away, so a full card can never refuse new arrivals; the
+	# messages themselves stay in /etc/e5-sms/inbox.json.  Raise it to leave
+	# a few recent ones readable from a phone the SIM is moved to.
+	option keep_on_sim '0'

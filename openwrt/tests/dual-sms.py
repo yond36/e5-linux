@@ -174,5 +174,54 @@ class Inbox(unittest.TestCase):
             scan.assert_not_called()
             receiver.scan({0,1});scan.assert_called_once()
 
+    def test_scan_clears_the_card_but_only_after_the_inbox_is_saved(self):
+        data=self.fresh();order=[]
+        def fake(card,query):
+            if query=='CCID?':return '+CCID: "89860012345678901234"'
+            if query=='CNMI?':return '+CNMI: 2,1,0,0,0'
+            if query=='CMGF?':return '+CMGF: 0'
+            if query=='CMGL=4':return '+CMGL: 7,0,,10\n\n'+ucs2('模拟内容')+'\n'
+            if query.startswith('CMGD='):order.append(('cmgd',query));return 'OK'
+            return 'OK'
+        with tempfile.TemporaryDirectory() as directory,patch.object(receiver,'RUN',Path(directory)),patch.object(receiver,'load',return_value=data),patch.object(receiver,'save',side_effect=lambda d:order.append('save')),patch.object(receiver,'alert'),patch.object(receiver,'forward'),patch.object(receiver,'keep_on_sim',return_value=0),patch.object(receiver,'execute',return_value='No calls were found'),patch.object(receiver,'current_card',return_value=0),patch.object(receiver,'at',side_effect=fake):
+            receiver.scan({0})
+        # durable first, then the card copy: a crash between the two loses nothing
+        self.assertEqual(order,['save',('cmgd','CMGD=7')])
+        self.assertEqual(len(data['messages']),1)
+        self.assertEqual(data['messages'][0]['parts'][0]['index'],7)
+
+    def test_keep_on_sim_leaves_the_newest_messages_on_the_card(self):
+        data=self.fresh();cleared=[]
+        listing=''.join(f'+CMGL: {i},0,,10\n\n'+ucs2(text)+'\n'
+                        for i,text in [(1,'第一条'),(2,'第二条'),(3,'第三条')])
+        def fake(card,query):
+            if query=='CCID?':return '+CCID: "89860012345678901234"'
+            if query=='CNMI?':return '+CNMI: 2,1,0,0,0'
+            if query=='CMGF?':return '+CMGF: 0'
+            if query=='CMGL=4':return listing
+            if query.startswith('CMGD='):cleared.append(query);return 'OK'
+            return 'OK'
+        with tempfile.TemporaryDirectory() as directory,patch.object(receiver,'RUN',Path(directory)),patch.object(receiver,'load',return_value=data),patch.object(receiver,'save'),patch.object(receiver,'alert'),patch.object(receiver,'forward'),patch.object(receiver,'keep_on_sim',return_value=1),patch.object(receiver,'execute',return_value='No calls were found'),patch.object(receiver,'current_card',return_value=0),patch.object(receiver,'at',side_effect=fake):
+            receiver.scan({0})
+        self.assertEqual(len(data['messages']),3)
+        self.assertEqual(sorted(cleared),['CMGD=1','CMGD=2'])
+        self.assertEqual(data['messages'][-1]['parts'][0]['index'],3)
+
+    def test_autoclear_never_deletes_a_reused_storage_index(self):
+        data=self.fresh()
+        receiver.ingest(data,0,'identity',sms_pdu.assemble([incoming('original',5)]),1)
+        replaced=sms_pdu.assemble([incoming('another',5)])
+        with patch.object(receiver,'at') as modem:
+            self.assertEqual(receiver.autoclear(data,0,'identity',replaced,0),0)
+        modem.assert_not_called()
+
+    def test_autoclear_leaves_an_incomplete_multipart_on_the_card(self):
+        data=self.fresh()
+        partial=sms_pdu.assemble([incoming('第一段',1,55,1)])
+        receiver.ingest(data,0,'identity',partial,1)
+        with patch.object(receiver,'at') as modem:
+            self.assertEqual(receiver.autoclear(data,0,'identity',partial,0),0)
+        modem.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()

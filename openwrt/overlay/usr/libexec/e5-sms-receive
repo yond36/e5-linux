@@ -167,6 +167,46 @@ def forward(ids):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+def keep_on_sim():
+    """How many of the most recent messages stay in the SIM storage (uci
+    e5-sms.main.keep_on_sim, default 0)."""
+    try:
+        result = subprocess.run(['uci', '-q', 'get', 'e5-sms.main.keep_on_sim'],
+                                capture_output=True, text=True, timeout=5)
+        return max(0, int(result.stdout.strip()))
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return 0
+
+
+def autoclear(data, card, identity, live, keep):
+    """Free the card's SMS storage: the inbox, not the card, is the archive.
+
+    The storage holds 50 messages; left alone it fills up and then refuses
+    new arrivals.  Only complete messages are cleared -- a half-arrived
+    multipart still needs its parts on the card to be assembled -- and only
+    a part whose fingerprint still matches the stored message is deleted: a
+    reused storage index never takes a different message with it.  keep_on_sim
+    leaves that many of the most recent messages on the card on purpose.
+    """
+    present = {p['index']: p['fingerprint'] for item in live for p in item['parts']}
+    if not present:
+        return 0
+    mine = sorted((m for m in data['messages']
+                   if m['card'] == card and m['identity'] == identity
+                   and m.get('direction') == 'in' and not m.get('deleted')),
+                  key=lambda m: (m.get('epoch') or 0, m['id']), reverse=True)
+    cleared = 0
+    for position, message in enumerate(mine):
+        if position < keep or message.get('state') != 'received':
+            continue
+        for part in message['parts']:
+            if present.get(part['index']) != part['fingerprint']:
+                continue
+            at(card, f'CMGD={part["index"]}')
+            cleared += 1
+    return cleared
+
+
 def scan(cards):
     with modem_locked() as acquired:
         if acquired:
@@ -183,17 +223,33 @@ def scan_locked(cards):
     own = current_card()
     with locked():
         data = load(); alerts, forwards = [], []
+        live = {}
         try:
             for card in sorted(cards):
                 try:
                     identity, messages = read_card(card, own)
+                    live[card] = (identity, messages)
                     new, ready = ingest(data, card, identity, messages, int(time.time()))
                     alerts += new; forwards += ready
                 except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                     data['slots'][str(card)] = {'ok': False, 'updated': int(time.time()), 'error': str(error)}
         finally:
-            at(own, 'CFUN?')  # restore the AT context for basic dial/send commands
-        data['updated'] = int(time.time()); save(data)
+            try:
+                data['updated'] = int(time.time()); save(data)
+                # (the messages are durable now: free the card storage, or
+                # its 50 slots fill up and new arrivals are refused; the
+                # listing just read is the guard -- one scan, one context)
+                keep = keep_on_sim()
+                for card in sorted(live):
+                    identity, messages = live[card]
+                    try:
+                        cleared = autoclear(data, card, identity, messages, keep)
+                        if cleared:
+                            logging.info('SMS storage: %d part(s) cleared from SIM%d', cleared, card + 1)
+                    except (RuntimeError, subprocess.TimeoutExpired) as error:
+                        logging.warning('SMS storage cleanup on SIM%d: %s', card + 1, error)
+            finally:
+                at(own, 'CFUN?')  # restore the AT context for basic dial/send commands
     alert(alerts, data); forward(forwards)
 
 
