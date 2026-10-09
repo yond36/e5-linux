@@ -1,5 +1,5 @@
 diff --git a/drivers/cpufreq/Kconfig b/drivers/cpufreq/Kconfig
-index 78702a083..7b989fd87 100644
+index 78702a083..de278a5fc 100644
 --- a/drivers/cpufreq/Kconfig
 +++ b/drivers/cpufreq/Kconfig
 @@ -259,6 +259,30 @@ endif
@@ -8,9 +8,9 @@ index 78702a083..7b989fd87 100644
  
 +config E5_DVFS
 +	tristate "E5 (Unisoc UMS9621) CPU DVFS through the firmware"
++	depends on CPU_FREQ
 +	depends on ARCH_SPRD || COMPILE_TEST
 +	depends on ARM64
-+	select CPU_FREQ
 +	help
 +	  The CPU cluster frequency/voltage tables of the Rongyue E5 live in its
 +	  trustos firmware, reached through Unisoc's SIP SVC protocol (SMC calls
