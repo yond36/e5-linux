@@ -149,7 +149,19 @@ jobs:
             python3 ci/infoscreen/tests/usb-reset.py
           fi
       - name: Build ARM64 toolchain container
-        run: docker build -t e5-mainline-build upstream/
+        # The Docker Hub egress of a shared runner hits "429 Too Many Requests"
+        # and "504 Gateway Timeout" fetching ubuntu:26.04 often enough to stop
+        # builds that have nothing wrong with them; retry before giving up.
+        run: |
+          for n in 1 2 3 4 5 6; do
+            if docker build -t e5-mainline-build upstream/; then
+              exit 0
+            fi
+            echo "docker build failed (attempt $n) -- Docker Hub rate limiting?" >&2
+            sleep $((n * 30))
+          done
+          echo "::error::docker build failed after 6 attempts" >&2
+          exit 1
       - name: Compile the release kernel
         env:
           E5_RELEASE: '1'
