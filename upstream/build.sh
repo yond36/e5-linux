@@ -123,6 +123,10 @@ else
 fi
 echo "== e5-dvfs files in the object tree:"
 ls -la "$O"/drivers/cpufreq/e5-dvfs* 2>/dev/null | sed "s|^|   |" | head -6
+echo "== every e5-dvfs source the tree holds:"
+find /src/linux -name "e5-dvfs*.c" -o -name "e5-dvfs*.o" 2>/dev/null | head -8 | sed "s|^|   |"
+echo "== the file the Makefile names: $(grep -n e5-dvfs /src/linux/drivers/cpufreq/Makefile | tr -d " 
+")"
 echo "== what the compiled object actually contains:"
 strings "$O/drivers/cpufreq/e5-dvfs.o" 2>/dev/null | grep -E "e5-dvfs:" | head -12 | sed "s|^|   |"
 echo "== e5-dvfs mentions in build.log: $(grep -c e5-dvfs "$O/build.log" 2>/dev/null || echo 0)"
