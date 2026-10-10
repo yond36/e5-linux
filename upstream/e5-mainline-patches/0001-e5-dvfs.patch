@@ -283,10 +283,10 @@ index 000000000..b599b28e6
 +MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (vendor order)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..6876e2c1c
+index 000000000..900040ee3
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,449 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10) CPU DVFS through the device firmware.
@@ -611,23 +611,22 @@ index 000000000..6876e2c1c
 + * case here -- the firmware owns the voltage, so there are no OPPs to build
 + * one from.
 + */
-+static int e5_ready(struct cpufreq_policy *policy)
++static void e5_ready(struct cpufreq_policy *policy)
 +{
 +	struct e5_cluster *cluster = policy->driver_data;
 +	struct thermal_cooling_device *cdev;
 +
 +	if (!cluster)
-+		return 0;
++		return;
 +	cdev = of_cpufreq_cooling_register(policy);
 +	if (IS_ERR_OR_NULL(cdev)) {
 +		pr_info("e5-dvfs: cluster %u: no cooling device (%ld)\n",
 +			cluster->id, PTR_ERR(cdev) ? PTR_ERR(cdev) : 0);
-+		return 0;
++		return;
 +	}
 +	cluster->cdev = cdev;
 +	pr_info("e5-dvfs: cluster %u: cooling device \"%s\" (%u states)\n",
 +		cluster->id, cdev->type, (unsigned int)cdev->max_state);
-+	return 0;
 +}
 +
 +static struct cpufreq_driver e5_cpufreq_driver = {
