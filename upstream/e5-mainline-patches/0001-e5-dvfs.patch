@@ -283,10 +283,10 @@ index 000000000..b599b28e6
 +MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (vendor order)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..4bdd4c98b
+index 000000000..231b740d6
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
-@@ -0,0 +1,405 @@
+@@ -0,0 +1,452 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10) CPU DVFS through the device firmware.
@@ -326,6 +326,7 @@ index 000000000..4bdd4c98b
 +#include <linux/cpufreq.h>
 +#include <linux/math64.h>
 +#include <linux/module.h>
++#include <linux/cpu_cooling.h>
 +#include <linux/nvmem-consumer.h>
 +#include <linux/of.h>
 +#include <linux/slab.h>
@@ -358,6 +359,7 @@ index 000000000..4bdd4c98b
 +	u32		temp_node;		/* the threshold node for 10 C */
 +	u64		freq_hz[E5_MAX_OPP];	/* ascending, as reported */
 +	u64		volt_uv[E5_MAX_OPP];
++	struct thermal_cooling_device *cdev;
 +};
 +
 +static struct e5_cluster e5_clusters[E5_MAX_CLUSTERS];
@@ -597,6 +599,39 @@ index 000000000..4bdd4c98b
 +	policy->driver_data = NULL;
 +}
 +
++/*
++ * Every policy that came up also becomes a cooling device, so the thermal
++ * zones the bootloader's device tree declares can clamp the CPU when it gets
++ * hot.  Without it the E5 has 25 thermal zones and nothing to cool them with
++ * (every zone shows cooling_device state 0 and the SoC has no other lever).
++ *
++ * of_cpufreq_cooling_register() looks for #cooling-cells on the policy's CPU
++ * node, which the vendor device tree has; it still registers when no energy
++ * model is present (it just leaves out the power extensions), which is the
++ * case here -- the firmware owns the voltage, so there are no OPPs to build
++ * one from.
++ */
++static int e5_ready(struct cpufreq_policy *policy)
++{
++	struct e5_cluster *cluster = policy->driver_data;
++	struct thermal_cooling_device *cdev;
++
++	if (!cluster)
++		return 0;
++	cdev = of_cpufreq_cooling_register(policy);
++	if (IS_ERR_OR_NULL(cdev)) {
++		pr_info("e5-dvfs: cluster %u: no cooling device (%ld)
++",
++			cluster->id, PTR_ERR(cdev) ? PTR_ERR(cdev) : 0);
++		return 0;
++	}
++	cluster->cdev = cdev;
++	pr_info("e5-dvfs: cluster %u: cooling device \"%s\" (%u states)
++",
++		cluster->id, cdev->type, (unsigned int)cdev->max_state);
++	return 0;
++}
++
 +static struct cpufreq_driver e5_cpufreq_driver = {
 +	.name			= "e5-dvfs",
 +	/*
@@ -611,6 +646,7 @@ index 000000000..4bdd4c98b
 +	.get			= e5_get,
 +	.target_index		= e5_set_target,
 +	.suspend		= cpufreq_generic_suspend,
++	.ready			= e5_ready,
 +};
 +
 +/*
@@ -689,6 +725,17 @@ index 000000000..4bdd4c98b
 +	return 0;
 +}
 +
-+late_initcall(e5_dvfs_init);
++static void __exit e5_dvfs_exit(void)
++{
++	int i;
++
++	for (i = 0; i < e5_cluster_count; i++) {
++		if (e5_clusters[i].cdev)
++			cpufreq_cooling_unregister(e5_clusters[i].cdev);
++	}
++	cpufreq_unregister_driver(&e5_cpufreq_driver);
++}
++
++module_exit(e5_dvfs_exit);
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("E5 (UMS9621) CPU DVFS through the firmware's SIP SVC service");
