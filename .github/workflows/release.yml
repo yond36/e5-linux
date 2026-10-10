@@ -134,6 +134,7 @@ jobs:
           python3 openwrt/tests/sim-probe.py
           E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 openwrt/tests/sim-lock.py
           E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 openwrt/tests/luci-firstboot.py
+          E5_TEST_IMAGE="$E5_WRT_BASE_IMAGE" python3 openwrt/tests/image-download.py
           node openwrt/tests/luci-sim-slots.cjs
           python3 magisk/tests.py
           python3 rootfs/tests/sd-registry.py

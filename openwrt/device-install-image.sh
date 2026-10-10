@@ -171,12 +171,23 @@ EOT
     echo "== writing the image into partition $n"
     dd if=/dev/zero of="$disk" bs=1048576 seek=$((start / 2048)) count=4 conv=fsync 2>/dev/null
     rm -f /tmp/e5-img.fail
+    # The download, the decompression and the write are one pipeline, and a
+    # failure in any of them has to stop the install: a truncated download
+    # (the CDN drops long responses) makes gunzip end early, dd still exits 0,
+    # and the card gets half an image whose every metadata checksum is wrong --
+    # "Checksum for group N failed" at mount, no journal, and the generation
+    # silently never boots.  That is the five-times-seen card corruption.
+    # So: pipefail around the pipeline, and gunzip's own failure is recorded
+    # as well (with pipefail the pipeline stops at the first failure anyway).
     case "$SRC" in
-        http://*|https://*) { wget -q -O - "$SRC" || touch /tmp/e5-img.fail; } | gunzip -c ;;
-        *) gunzip -c "$SRC" ;;
-    esac | dd of="$disk" bs=1048576 seek=$((start / 2048)) conv=fsync 2>/tmp/e5-img.dd ||
+        http://*|https://*) set -o pipefail; { wget -q -O - "$SRC" || touch /tmp/e5-img.fail; } ;;
+        *) cat "$SRC" ;;
+    esac |
+        { gunzip -c || touch /tmp/e5-img.fail; } |
+        { dd of="$disk" bs=1048576 seek=$((start / 2048)) conv=fsync 2>/tmp/e5-img.dd ||
+              touch /tmp/e5-img.fail; } ||
         { cat /tmp/e5-img.dd >&2; echo "writing the card failed" >&2; exit 1; }
-    [ ! -e /tmp/e5-img.fail ] || { rm -f /tmp/e5-img.fail; echo "download failed" >&2; exit 1; }
+    [ ! -e /tmp/e5-img.fail ] || { rm -f /tmp/e5-img.fail; echo "download failed (truncated?)" >&2; exit 1; }
 
     losetup -o $((start * 512)) "$lo" "$disk"
     mkdir -p "$NEW_ROOT"
