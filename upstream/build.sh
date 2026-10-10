@@ -123,6 +123,8 @@ else
 fi
 echo "== e5-dvfs files in the object tree:"
 ls -la "$O"/drivers/cpufreq/e5-dvfs* 2>/dev/null | sed "s|^|   |" | head -6
+echo "== what the compiled object actually contains:"
+strings "$O/drivers/cpufreq/e5-dvfs.o" 2>/dev/null | grep -E "e5-dvfs:" | head -12 | sed "s|^|   |"
 echo "== e5-dvfs mentions in build.log: $(grep -c e5-dvfs "$O/build.log" 2>/dev/null || echo 0)"
 grep -E "e5-dvfs" "$O/build.log" 2>/dev/null | head -4 | sed "s|^|   |"
 if [ -f "$dvfs" ]; then
