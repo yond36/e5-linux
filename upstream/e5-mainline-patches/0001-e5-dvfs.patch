@@ -283,10 +283,10 @@ index 000000000..b599b28e6
 +MODULE_DESCRIPTION("E5: probe of the firmware CPU DVFS service (vendor order)");
 diff --git a/drivers/cpufreq/e5-dvfs.c b/drivers/cpufreq/e5-dvfs.c
 new file mode 100644
-index 000000000..900040ee3
+index 000000000..f49678ccb
 --- /dev/null
 +++ b/drivers/cpufreq/e5-dvfs.c
-@@ -0,0 +1,449 @@
+@@ -0,0 +1,452 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * E5 (Unisoc UMS9621 / ums9158_1h10) CPU DVFS through the device firmware.
@@ -733,6 +733,9 @@ index 000000000..900040ee3
 +	cpufreq_unregister_driver(&e5_cpufreq_driver);
 +}
 +
++/* a module: the service loads it once the system is up (a FREQ_SET during
++ * early boot is what killed the built-in version) */
++module_init(e5_dvfs_init);
 +module_exit(e5_dvfs_exit);
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("E5 (UMS9621) CPU DVFS through the firmware's SIP SVC service");
