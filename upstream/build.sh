@@ -91,12 +91,37 @@ while IFS= read -r l; do
 done < "$CFG"
 [ -z "$bad" ] || { printf "config options not taken:$bad\n" >&2; exit 1; }
 
+# The object tree lives in the docker volume e5-mainline-out and survives
+# between runs, keyed only by kernel release -- which does not change when a
+# patch's own sources do.  A stale e5-dvfs.o was silently reused that way: the
+# module in the image had the cooling code but not the handshake that the
+# patch's source clearly has.  Drop this series' objects first so the sources
+# are what gets compiled.
+rm -rf \
+    "$O"/drivers/cpufreq/e5-dvfs.o "$O"/drivers/cpufreq/e5-dvfs-probe.o \
+    "$O"/drivers/cpufreq/.e5-dvfs.o.cmd "$O"/drivers/cpufreq/.e5-dvfs-probe.o.cmd \
+    "$O"/drivers/cpufreq/e5-dvfs.ko "$O"/drivers/cpufreq/e5-dvfs-probe.ko \
+    "$O"/drivers/cpufreq/.e5-dvfs.ko.cmd "$O"/drivers/cpufreq/.e5-dvfs-probe.ko.cmd
+
 # on failure, the compiler's own messages (a plain grep for "error" also matches object names)
 make O="$O" ARCH=arm64 -j"$(nproc)" Image modules > "$O/build.log" 2>&1 || {
     grep -n -E ": (fatal )?error: |-Werror|treated as errors|undefined reference|No such file|Killed|internal compiler error|\*\*\*" -A3 "$O/build.log" | head -80 || true
     echo "--- end of build.log:"; tail -25 "$O/build.log"
     exit 1
 }
+# A module that silently lost half its code is worse than a failed build: the
+# image ships it, it loads, and the feature is simply absent -- which is how
+# the DVFS client reached the card with its cooling code but no handshake.
+# Check the strings the source promises before anything is staged.
+dvfs=$O/drivers/cpufreq/e5-dvfs.ko
+if [ -f "$dvfs" ]; then
+    for s in "firmware DVFS service" "registered, %d cluster" "cooling device"; do
+        strings "$dvfs" | grep -qF "$s" || {
+            echo "e5-dvfs.ko is missing the string: $s (a stale object?)" >&2; exit 1; }
+    done
+    echo "== e5-dvfs.ko has the handshake and the cooling code ($(stat -c %s "$dvfs") bytes)"
+fi
+
 mkdir -p $DEST
 cp "$O/arch/arm64/boot/Image" "$O/System.map" "$O/modules.builtin" "$O/modules.builtin.modinfo" $DEST/
 cp "$O/.config" $DEST/config
