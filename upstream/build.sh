@@ -132,11 +132,10 @@ strings "$O/drivers/cpufreq/e5-dvfs.o" 2>/dev/null | grep -E "e5-dvfs:" | head -
 echo "== e5-dvfs mentions in build.log: $(grep -c e5-dvfs "$O/build.log" 2>/dev/null || echo 0)"
 grep -E "e5-dvfs" "$O/build.log" 2>/dev/null | head -4 | sed "s|^|   |"
 if [ -f "$dvfs" ]; then
-    echo "== strings on the .ko says: $(strings "$dvfs" 2>&1 | grep -c "e5-dvfs:") e5-dvfs lines (exit $?)"
-    echo "== strings present? $(command -v strings || echo NO-strings-binary)"
-    echo "== grep -a instead: $(grep -ac "firmware DVFS service" "$dvfs" 2>/dev/null || echo 0)"
+    # (grep -a, not strings|grep: strings splits on its own idea of a string
+    # and a %-formatted message is not guaranteed to come out in one piece)
     for s in "firmware DVFS service" "registered, %d cluster" "cooling device"; do
-        strings "$dvfs" | grep -qF "$s" || {
+        grep -aqF "$s" "$dvfs" || {
             echo "e5-dvfs.ko is missing the string: $s (a stale object?)" >&2; exit 1; }
     done
     echo "== e5-dvfs.ko has the handshake and the cooling code ($(stat -c %s "$dvfs") bytes)"
