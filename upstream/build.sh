@@ -121,6 +121,10 @@ if [ -f drivers/cpufreq/e5-dvfs.c ]; then
 else
     echo "== drivers/cpufreq/e5-dvfs.c does NOT exist in the tree" >&2
 fi
+echo "== e5-dvfs files in the object tree:"
+ls -la "$O"/drivers/cpufreq/e5-dvfs* 2>/dev/null | sed "s|^|   |" | head -6
+echo "== e5-dvfs mentions in build.log: $(grep -c e5-dvfs "$O/build.log" 2>/dev/null || echo 0)"
+grep -E "e5-dvfs" "$O/build.log" 2>/dev/null | head -4 | sed "s|^|   |"
 if [ -f "$dvfs" ]; then
     for s in "firmware DVFS service" "registered, %d cluster" "cooling device"; do
         strings "$dvfs" | grep -qF "$s" || {
