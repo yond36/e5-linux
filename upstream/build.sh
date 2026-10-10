@@ -114,6 +114,13 @@ make O="$O" ARCH=arm64 -j"$(nproc)" Image modules > "$O/build.log" 2>&1 || {
 # the DVFS client reached the card with its cooling code but no handshake.
 # Check the strings the source promises before anything is staged.
 dvfs=$O/drivers/cpufreq/e5-dvfs.ko
+# (what the tree actually holds: the patch is verified to contain the
+# handshake, so if the built module lacks it, the tree is not what was patched)
+if [ -f drivers/cpufreq/e5-dvfs.c ]; then
+    echo "== e5-dvfs.c: $(wc -l < drivers/cpufreq/e5-dvfs.c) lines, sha256 $(sha256sum drivers/cpufreq/e5-dvfs.c | cut -c1-16), handshake=$(grep -c 'firmware DVFS service' drivers/cpufreq/e5-dvfs.c)"
+else
+    echo "== drivers/cpufreq/e5-dvfs.c does NOT exist in the tree" >&2
+fi
 if [ -f "$dvfs" ]; then
     for s in "firmware DVFS service" "registered, %d cluster" "cooling device"; do
         strings "$dvfs" | grep -qF "$s" || {
